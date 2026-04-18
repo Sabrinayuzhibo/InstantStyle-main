@@ -11,8 +11,10 @@ paths:
   style_image_path: test_ref_images/blue.jpg
   # 结构控制图（会先做 Canny，再送入 ControlNet）
   control_image_path: test_images/004.jpg
-  # 最终输出图像文件路径
-  output_image_path: outputs_sdxl/result_sdxl_canny_adain.png
+  # 批量任务文件（jsonl），每行一个对象：{"style_image_path": "...", "control_image_path": "..."}
+  pairs_jsonl: pairs_sdxl.jsonl
+  # 批量模式输出目录；若未设置则回退到 output_image_path 的父目录
+  output_dir: outputs_sdxl
 
 runtime:
   # 推理设备：cuda/cpu
@@ -45,8 +47,14 @@ output:
   width: null
   height: null
 
+debug:
+  # 是否打印 AdaIN 自检统计
+  print_adain_stats: true
+  # 输出命中的 AdaIN processor 样本数量
+  adain_processor_sample_count: 5
+
 generate:
-  prompt: "A beautiful woman, close-up portrait, hand near face, looking at viewer, watercolor painting style, soft pastel colors, light blue tones, aesthetic illustration, masterpiece, best quality, highly detailed"
+  prompt: "A beautiful woman"
   negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry"
   # IP-Adapter 风格强度
   scale: 1.0

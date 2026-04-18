@@ -1,0 +1,39 @@
+paths:
+  base_model_path: /root/autodl-tmp/AI_Models/stable-diffusion-xl-base-1.0
+  controlnet_path: diffusers_models/controlnet-canny-sdxl-1.0
+  image_encoder_path: sdxl_models/image_encoder
+  ip_ckpt: sdxl_models/ip-adapter_sdxl.bin
+  pairs_jsonl: pairs_sdxl_4.jsonl
+  output_dir: outputs_sdxl_adain_off_4
+
+runtime:
+  device: cuda
+
+model_loading:
+  controlnet_use_safetensors: false
+
+ip_adapter:
+  target_blocks:
+    - up_blocks.0.attentions.1
+  adain_ip: false
+  adain_alpha: 1.0
+  adain_beta: 1.0
+
+preprocess:
+  canny_low_threshold: 50
+  canny_high_threshold: 200
+
+output:
+  use_control_image_size: true
+  width: null
+  height: null
+
+generate:
+  prompt: "A beautiful woman"
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry"
+  scale: 1.0
+  guidance_scale: 5
+  num_samples: 1
+  num_inference_steps: 10
+  seed: 42
+  controlnet_conditioning_scale: 0.6

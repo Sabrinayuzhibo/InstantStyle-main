@@ -46,4 +46,6 @@ cache_lineart/
 gradio_cached_examples/
 
 assets/
-test_*/
+images_*/
+IP-Adapter
+outputs_*/

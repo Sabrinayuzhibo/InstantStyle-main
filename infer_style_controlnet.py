@@ -1,7 +1,8 @@
 import os
 import argparse
+import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from diffusers.models.controlnets.controlnet import ControlNetModel
@@ -53,17 +54,52 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _resolve_path(path_value: str, base_dir: Path) -> Path:
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def _load_pairs_jsonl(jsonl_path: Path) -> List[Dict[str, Any]]:
+    _require_exists(jsonl_path, "Pairs jsonl file")
+    pairs: List[Dict[str, Any]] = []
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line_no, raw in enumerate(f, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON at {jsonl_path}:{line_no}: {exc}") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"JSONL record must be an object at {jsonl_path}:{line_no}")
+            if "style_image_path" not in record or "control_image_path" not in record:
+                raise ValueError(
+                    f"Missing style_image_path/control_image_path at {jsonl_path}:{line_no}"
+                )
+            pairs.append(record)
+    if not pairs:
+        raise ValueError(f"No valid records found in {jsonl_path}")
+    return pairs
+
+
 def main() -> None:
     args = _parse_args()
     cfg: Dict[str, Any] = {}
+    config_base_dir = Path.cwd()
     if args.config:
-        cfg = _load_config(Path(args.config).expanduser())
+        config_path = Path(args.config).expanduser()
+        cfg = _load_config(config_path)
+        config_base_dir = config_path.resolve().parent
 
     paths_cfg = cfg.get("paths", {})
     runtime_cfg = cfg.get("runtime", {})
     preprocess_cfg = cfg.get("preprocess", {})
     generate_cfg = cfg.get("generate", {})
     output_cfg = cfg.get("output", {})
+    debug_cfg = cfg.get("debug", {})
     ip_adapter_cfg = cfg.get("ip_adapter", {})
     model_loading_cfg = cfg.get("model_loading", {})
 
@@ -81,6 +117,8 @@ def main() -> None:
     style_image_path = paths_cfg.get("style_image_path", "test_ref_images/blue.jpg")
     control_image_path = paths_cfg.get("control_image_path", "test_images/004.jpg")
     output_image_path = paths_cfg.get("output_image_path", "result_1.png")
+    pairs_jsonl_path = paths_cfg.get("pairs_jsonl")
+    output_dir_cfg = paths_cfg.get("output_dir")
 
     device = _get_device(runtime_cfg.get("device") or os.environ.get("INSTANTSTYLE_DEVICE"))
     torch_device = torch.device(device)
@@ -113,18 +151,20 @@ def main() -> None:
     configured_height = output_cfg.get("height")
 
     controlnet_use_safetensors = bool(model_loading_cfg.get("controlnet_use_safetensors", False))
+    print_adain_stats = bool(debug_cfg.get("print_adain_stats", False))
+    adain_sample_count = int(debug_cfg.get("adain_processor_sample_count", 5))
 
-    base_model_dir = _require_exists(Path(base_model_path).expanduser(), "Base model directory")
+    base_model_dir = _require_exists(_resolve_path(str(base_model_path), config_base_dir), "Base model directory")
     if not (base_model_dir / "model_index.json").exists():
         raise FileNotFoundError(
             "Base model directory does not look like a Diffusers SDXL model (missing model_index.json): "
             + str(base_model_dir)
         )
 
-    image_encoder_dir = _require_exists(Path(image_encoder_path).expanduser(), "Image encoder directory")
-    ip_ckpt_path = _require_exists(Path(ip_ckpt).expanduser(), "IP-Adapter checkpoint")
+    image_encoder_dir = _require_exists(_resolve_path(str(image_encoder_path), config_base_dir), "Image encoder directory")
+    ip_ckpt_path = _require_exists(_resolve_path(str(ip_ckpt), config_base_dir), "IP-Adapter checkpoint")
 
-    controlnet_dir = _require_exists(Path(controlnet_path).expanduser(), "ControlNet directory")
+    controlnet_dir = _require_exists(_resolve_path(str(controlnet_path), config_base_dir), "ControlNet directory")
     controlnet = ControlNetModel.from_pretrained(
         str(controlnet_dir),
         use_safetensors=controlnet_use_safetensors,
@@ -150,44 +190,110 @@ def main() -> None:
         adain_beta=adain_beta,
     )
 
-    style_image = Image.open(_require_exists(Path(style_image_path), "Style image")).convert("RGB")
-    style_image = style_image.resize((512, 512))
+    adain_enabled_processors: List[str] = []
+    if print_adain_stats:
+        for proc_name, proc in ip_model.pipe.unet.attn_processors.items():
+            if getattr(proc, "adainIP", False):
+                adain_enabled_processors.append(proc_name)
+            if hasattr(proc, "adain_call_count"):
+                proc.adain_call_count = 0
+        print(
+            f"[debug] adain_enabled_processor_count={len(adain_enabled_processors)}"
+        )
+        print(
+            "[debug] adain_enabled_processor_samples="
+            + str(adain_enabled_processors[:adain_sample_count])
+        )
 
-    control_image_file = _require_exists(Path(control_image_path), "Control image")
-    input_image = cv2.imread(str(control_image_file))
-    if input_image is None:
-        raise FileNotFoundError(f"Control image not found or unreadable: {control_image_file}")
-
-    detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
-    canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
-
-    control_h, control_w = input_image.shape[:2]
-    if use_control_image_size:
-        out_width, out_height = control_w, control_h
+    if output_dir_cfg:
+        output_dir = _resolve_path(str(output_dir_cfg), config_base_dir)
     else:
-        if configured_width is None or configured_height is None:
-            raise ValueError("When use_control_image_size is false, width and height must be set in config.")
-        out_width, out_height = int(configured_width), int(configured_height)
+        output_dir = _resolve_path(str(Path(output_image_path).parent), config_base_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    images = ip_model.generate(
-        pil_image=style_image,
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        scale=scale,
-        guidance_scale=guidance_scale,
-        num_samples=num_samples,
-        num_inference_steps=num_inference_steps,
-        seed=seed,
-        width=out_width,
-        height=out_height,
-        image=canny_map,
-        controlnet_conditioning_scale=controlnet_conditioning_scale,
-    )
+    if pairs_jsonl_path:
+        pairs_file = _resolve_path(str(pairs_jsonl_path), config_base_dir)
+        tasks = _load_pairs_jsonl(pairs_file)
+        print(f"[info] loaded {len(tasks)} tasks from {pairs_file}")
+    else:
+        tasks = [
+            {
+                "style_image_path": str(style_image_path),
+                "control_image_path": str(control_image_path),
+                "output_image_path": str(output_image_path),
+            }
+        ]
 
-    output_path = Path(output_image_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    images[0].save(output_path)
-    print(f"[info] saved: {output_path}")
+    for task_idx, task in enumerate(tasks, start=1):
+        style_file = _require_exists(
+            _resolve_path(str(task["style_image_path"]), config_base_dir),
+            f"Style image [{task_idx}]",
+        )
+        control_file = _require_exists(
+            _resolve_path(str(task["control_image_path"]), config_base_dir),
+            f"Control image [{task_idx}]",
+        )
+
+        style_image = Image.open(style_file).convert("RGB").resize((512, 512))
+
+        input_image = cv2.imread(str(control_file))
+        if input_image is None:
+            raise FileNotFoundError(f"Control image not found or unreadable: {control_file}")
+
+        detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
+        canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
+
+        control_h, control_w = input_image.shape[:2]
+        if use_control_image_size:
+            out_width, out_height = control_w, control_h
+        else:
+            if configured_width is None or configured_height is None:
+                raise ValueError("When use_control_image_size is false, width and height must be set in config.")
+            out_width, out_height = int(configured_width), int(configured_height)
+
+        images = ip_model.generate(
+            pil_image=style_image,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            scale=scale,
+            guidance_scale=guidance_scale,
+            num_samples=num_samples,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            width=out_width,
+            height=out_height,
+            image=canny_map,
+            controlnet_conditioning_scale=controlnet_conditioning_scale,
+        )
+
+        custom_output = task.get("output_image_path")
+        if custom_output:
+            save_base = _resolve_path(str(custom_output), config_base_dir)
+            save_base.parent.mkdir(parents=True, exist_ok=True)
+            save_paths = [save_base]
+            if len(images) > 1:
+                save_paths = []
+                for sample_idx in range(1, len(images) + 1):
+                    save_paths.append(
+                        save_base.with_name(f"{save_base.stem}_s{sample_idx:02d}{save_base.suffix}")
+                    )
+        else:
+            base_name = f"{task_idx:04d}_sty_{style_file.stem}_cnt_{control_file.stem}"
+            save_paths = [output_dir / f"{base_name}.jpg"]
+            if len(images) > 1:
+                save_paths = []
+                for sample_idx in range(1, len(images) + 1):
+                    save_paths.append(output_dir / f"{base_name}_s{sample_idx:02d}.jpg")
+
+        for img, save_path in zip(images, save_paths):
+            img.save(save_path)
+            print(f"[info] saved: {save_path}")
+
+    if print_adain_stats:
+        adain_total_calls = 0
+        for proc in ip_model.pipe.unet.attn_processors.values():
+            adain_total_calls += int(getattr(proc, "adain_call_count", 0))
+        print(f"[debug] adain_runtime_call_count={adain_total_calls}")
 
 
 if __name__ == "__main__":
