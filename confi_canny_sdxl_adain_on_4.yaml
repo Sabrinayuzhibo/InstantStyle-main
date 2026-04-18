@@ -8,16 +8,19 @@ paths:
 
 runtime:
   device: cuda
+  enable_xformers: true
 
 model_loading:
+  base_model_variant: fp16
+  base_model_use_safetensors: true
   controlnet_use_safetensors: false
 
 ip_adapter:
   target_blocks:
     - up_blocks.0.attentions.1
   adain_ip: true
-  adain_alpha: 1.0
-  adain_beta: 1.0
+  adain_alpha: 0.7
+  adain_beta: 0.6
 
 preprocess:
   canny_low_threshold: 50
@@ -29,8 +32,8 @@ output:
   height: null
 
 generate:
-  prompt: "A beautiful woman"
-  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry"
+  prompt: "vibrant digital painting style, expressive brushstrokes,highly saturated,high quality"
+  negative_prompt: "photorealistic, photorealism, photograph, monotone, grayscale, muted colors, low saturation, blurry, bad art."
   scale: 1.0
   guidance_scale: 5
   num_samples: 1

@@ -121,6 +121,7 @@ def main() -> None:
     output_dir_cfg = paths_cfg.get("output_dir")
 
     device = _get_device(runtime_cfg.get("device") or os.environ.get("INSTANTSTYLE_DEVICE"))
+    enable_xformers = bool(runtime_cfg.get("enable_xformers", True))
     torch_device = torch.device(device)
     torch_dtype = torch.float16 if device == "cuda" else torch.float32
 
@@ -145,12 +146,16 @@ def main() -> None:
     num_inference_steps = int(generate_cfg.get("num_inference_steps", 30))
     seed = int(generate_cfg.get("seed", 42))
     controlnet_conditioning_scale = float(generate_cfg.get("controlnet_conditioning_scale", 0.6))
+    read_prompt_from_jsonl = bool(generate_cfg.get("read_prompt_from_jsonl", False))
+    read_negative_prompt_from_jsonl = bool(generate_cfg.get("read_negative_prompt_from_jsonl", False))
 
     use_control_image_size = bool(output_cfg.get("use_control_image_size", True))
     configured_width = output_cfg.get("width")
     configured_height = output_cfg.get("height")
 
     controlnet_use_safetensors = bool(model_loading_cfg.get("controlnet_use_safetensors", False))
+    base_model_variant = model_loading_cfg.get("base_model_variant")
+    base_model_use_safetensors = bool(model_loading_cfg.get("base_model_use_safetensors", True))
     print_adain_stats = bool(debug_cfg.get("print_adain_stats", False))
     adain_sample_count = int(debug_cfg.get("adain_processor_sample_count", 5))
 
@@ -169,6 +174,7 @@ def main() -> None:
         str(controlnet_dir),
         use_safetensors=controlnet_use_safetensors,
         torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
     ).to(torch_device)
 
     pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
@@ -176,7 +182,21 @@ def main() -> None:
         controlnet=controlnet,
         torch_dtype=torch_dtype,
         add_watermarker=False,
+        low_cpu_mem_usage=True,
+        variant=base_model_variant,
+        use_safetensors=base_model_use_safetensors,
     )
+    if enable_xformers:
+        if device != "cuda":
+            print("[warn] runtime.enable_xformers is true but device is not cuda; skip xformers")
+        else:
+            try:
+                import xformers  # noqa: F401
+
+                pipe.enable_xformers_memory_efficient_attention()
+                print("[info] xformers memory efficient attention enabled")
+            except Exception as exc:
+                print(f"[warn] failed to enable xformers memory efficient attention: {exc}")
     pipe.vae.enable_tiling()
 
     ip_model = IPAdapterXL(
@@ -253,8 +273,16 @@ def main() -> None:
 
         images = ip_model.generate(
             pil_image=style_image,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
+            prompt=(
+                str(task.get("prompt", prompt))
+                if read_prompt_from_jsonl
+                else prompt
+            ),
+            negative_prompt=(
+                str(task.get("negative_prompt", negative_prompt))
+                if read_negative_prompt_from_jsonl
+                else negative_prompt
+            ),
             scale=scale,
             guidance_scale=guidance_scale,
             num_samples=num_samples,

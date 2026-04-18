@@ -19,6 +19,8 @@ paths:
 runtime:
   # 推理设备：cuda/cpu
   device: cuda
+  # 启用 xformers memory efficient attention（仅 CUDA）
+  enable_xformers: true
 
 model_loading:
   # 本地权重是否按 safetensors 加载

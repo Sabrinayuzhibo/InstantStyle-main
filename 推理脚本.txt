@@ -1,0 +1,1 @@
+python infer_style_controlnet.py --config confi_canny_sdxl_adain_on_4.yaml
