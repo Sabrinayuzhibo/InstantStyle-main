@@ -1,0 +1,40 @@
+paths:
+  base_model_path: D:/AI_Models/stable-diffusion-v1-5
+  controlnet_path: diffusers_models/control_v11p_sd15_lineart
+  image_encoder_path: models/image_encoder
+  ip_ckpt: models/ip-adapter_sd15.bin
+  style_image_path: test_ref_images/red.jpg
+  control_image_path: test_images/002.jpg
+  output_image_path: result_sd15_line_art_controlnet_002.png
+
+runtime:
+  device: cuda
+
+model_loading:
+  controlnet_variant: fp16
+  controlnet_use_safetensors: false
+
+ip_adapter:
+  target_blocks:
+    - block
+
+preprocess:
+  lineart_coarse: false
+  lineart_detector_model: lllyasviel/Annotators
+  use_lineart_cache: true
+  lineart_cache_path: cache_lineart/
+
+output:
+  use_control_image_size: true
+  width: null
+  height: null
+
+generate:
+  prompt: "A beautiful woman, close-up portrait, hand near face, looking at viewer, watercolor painting style, soft pastel colors, light blue tones, aesthetic illustration, masterpiece, best quality, highly detailed"
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry, ugly, bad anatomy"
+  scale: 0.5
+  guidance_scale: 5
+  num_samples: 1
+  num_inference_steps: 30
+  seed: 42
+  controlnet_conditioning_scale: 1.0

@@ -1,0 +1,49 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs / runtime
+*.log
+.cache/
+
+# Model weights and large artifacts
+models/
+sdxl_models/
+diffusers_models/
+checkpoints/
+huggingface/
+
+# Generated outputs and preprocess caches
+outputs/
+cache_canny/
+cache_lineart/
+
+# Optional local folders
+gradio_cached_examples/
+
+assets/
+test_*/

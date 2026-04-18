@@ -1,0 +1,86 @@
+paths:
+  # Diffusers 格式的 SD1.5 基础模型目录（需包含 model_index.json）
+  base_model_path: D:/AI_Models/stable-diffusion-v1-5
+  # Canny 版 ControlNet 权重目录
+  controlnet_path: diffusers_models/control_v11p_sd15_canny
+  # IP-Adapter 的图像编码器目录
+  image_encoder_path: models/image_encoder
+  # IP-Adapter 权重文件
+  ip_ckpt: models/ip-adapter_sd15.bin
+  # 风格参考图（IP-Adapter 输入）
+  style_image_path: test_ref_images/blue.jpg
+  # 结构控制图（会先做 Canny，再送入 ControlNet）
+  control_image_path: test_images/002_color.jpg
+  # 最终生成产物目录（主配置，脚本会在此目录下自动命名文件）
+  output_dir: outputs
+  # 兼容旧字段：仅在未设置 output_dir 时用于推导输出目录
+  output_image_path: res_canny_controlent_adain_001_scale0.2_cond_scale1.0.png
+
+runtime:
+  # 推理设备：cuda/cpu
+  device: cuda
+
+model_loading:
+  # 本地 ControlNet 权重变体（fp16 更省显存）
+  controlnet_variant: fp16
+  # 本地权重是否按 safetensors 加载
+  controlnet_use_safetensors: false
+
+ip_adapter:
+  # 指定哪些 UNet block 启用 IP-Adapter（可多选）
+  target_blocks:
+    - down_blocks.2
+    - mid_block
+    - up_blocks.1
+  # 是否启用 AdaIN 风格融合（true 时会走 AdaIN 逻辑）
+  adain_ip: false
+  # AdaIN 中 std 融合权重（0~1，越大越偏参考风格纹理）
+  adain_alpha: 1.0
+  # AdaIN 中 mean 融合权重（0~1，越大越偏参考风格色调）
+  adain_beta: 1.0
+
+preprocess:
+  # 双边滤波核大小，>0 启用；越大去噪越强、细节可能变少
+  bilateral_d: 7
+  # 双边滤波颜色域 sigma
+  bilateral_sigma_color: 50
+  # 双边滤波空间域 sigma
+  bilateral_sigma_space: 50
+  # Canny 低阈值（越低越容易保留弱边缘）
+  canny_low_threshold: 35
+  # Canny 高阈值（越低边缘越多，噪点也可能增多）
+  canny_high_threshold: 140
+  # Sobel 核大小，仅支持 3/5/7
+  canny_aperture_size: 3
+  # 是否使用更精确的 L2 梯度
+  canny_l2gradient: true
+  # 是否启用 Canny 缓存
+  use_canny_cache: true
+  # Canny 缓存目录或文件路径（目录模式会自动命名）
+  canny_cache_path: cache_canny/
+
+output:
+  # true: 输出尺寸跟控制图一致；false: 使用下方 width/height
+  use_control_image_size: true
+  # 固定输出宽（仅 use_control_image_size=false 时生效）
+  width: null
+  # 固定输出高（仅 use_control_image_size=false 时生效）
+  height: null
+
+generate:
+  # 正向提示词
+  prompt: "A beautiful woman, close-up portrait, hand near face, looking at viewer, watercolor painting style, soft pastel colors, light blue tones, aesthetic illustration, masterpiece, best quality, highly detailed"
+  # 反向提示词
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry, ugly, bad anatomy"
+  # IP-Adapter 风格强度（越大越贴近参考图风格）
+  scale: 0.2
+  # 文本引导强度（越大越贴 prompt）
+  guidance_scale: 5
+  # 每次生成张数
+  num_samples: 1
+  # 采样步数（越大通常细节更好，但更慢）
+  num_inference_steps: 30
+  # 随机种子（固定可复现）
+  seed: 42
+  # ControlNet 约束强度（越大越跟随 Canny 结构）
+  controlnet_conditioning_scale: 0.75
