@@ -271,18 +271,25 @@ def main() -> None:
                 raise ValueError("When use_control_image_size is false, width and height must be set in config.")
             out_width, out_height = int(configured_width), int(configured_height)
 
+        task_prompt = str(task.get("prompt", prompt)) if read_prompt_from_jsonl else prompt
+        task_negative_prompt = (
+            str(task.get("negative_prompt", negative_prompt))
+            if read_negative_prompt_from_jsonl
+            else negative_prompt
+        )
+
+        if pairs_jsonl_path and read_prompt_from_jsonl:
+            print(
+                f"[info] task {task_idx}/{len(tasks)} prompt={task_prompt}"
+            )
+            print(
+                f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
+            )
+
         images = ip_model.generate(
             pil_image=style_image,
-            prompt=(
-                str(task.get("prompt", prompt))
-                if read_prompt_from_jsonl
-                else prompt
-            ),
-            negative_prompt=(
-                str(task.get("negative_prompt", negative_prompt))
-                if read_negative_prompt_from_jsonl
-                else negative_prompt
-            ),
+            prompt=task_prompt,
+            negative_prompt=task_negative_prompt,
             scale=scale,
             guidance_scale=guidance_scale,
             num_samples=num_samples,
