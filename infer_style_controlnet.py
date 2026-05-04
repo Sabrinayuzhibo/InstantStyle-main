@@ -75,9 +75,11 @@ def _load_pairs_jsonl(jsonl_path: Path) -> List[Dict[str, Any]]:
                 raise ValueError(f"Invalid JSON at {jsonl_path}:{line_no}: {exc}") from exc
             if not isinstance(record, dict):
                 raise ValueError(f"JSONL record must be an object at {jsonl_path}:{line_no}")
-            if "style_image_path" not in record or "control_image_path" not in record:
+            if "style_image_path" not in record:
+                raise ValueError(f"Missing style_image_path at {jsonl_path}:{line_no}")
+            if "control_image_path" not in record and "canny_image_path" not in record:
                 raise ValueError(
-                    f"Missing style_image_path/control_image_path at {jsonl_path}:{line_no}"
+                    f"Missing control_image_path/canny_image_path at {jsonl_path}:{line_no}"
                 )
             pairs.append(record)
     if not pairs:
@@ -116,6 +118,7 @@ def main() -> None:
     controlnet_path = paths_cfg.get("controlnet_path", "diffusers_models/controlnet-canny-sdxl-1.0")
     style_image_path = paths_cfg.get("style_image_path", "test_ref_images/blue.jpg")
     control_image_path = paths_cfg.get("control_image_path", "test_images/004.jpg")
+    canny_image_path = paths_cfg.get("canny_image_path")
     output_image_path = paths_cfg.get("output_image_path", "result_1.png")
     pairs_jsonl_path = paths_cfg.get("pairs_jsonl")
     output_dir_cfg = paths_cfg.get("output_dir")
@@ -240,6 +243,7 @@ def main() -> None:
             {
                 "style_image_path": str(style_image_path),
                 "control_image_path": str(control_image_path),
+                "canny_image_path": canny_image_path,
                 "output_image_path": str(output_image_path),
             }
         ]
@@ -249,21 +253,42 @@ def main() -> None:
             _resolve_path(str(task["style_image_path"]), config_base_dir),
             f"Style image [{task_idx}]",
         )
-        control_file = _require_exists(
-            _resolve_path(str(task["control_image_path"]), config_base_dir),
-            f"Control image [{task_idx}]",
-        )
+        control_file: Optional[Path] = None
+        task_control_image_path = task.get("control_image_path")
+        if task_control_image_path:
+            control_file = _require_exists(
+                _resolve_path(str(task_control_image_path), config_base_dir),
+                f"Control image [{task_idx}]",
+            )
+
+        task_canny_image_path = task.get("canny_image_path")
+        canny_file: Optional[Path] = None
+        if task_canny_image_path:
+            canny_file = _require_exists(
+                _resolve_path(str(task_canny_image_path), config_base_dir),
+                f"Canny image [{task_idx}]",
+            )
+
+        if control_file is None and canny_file is None:
+            raise ValueError(
+                f"Task [{task_idx}] must provide control_image_path or canny_image_path"
+            )
 
         style_image = Image.open(style_file).convert("RGB").resize((512, 512))
 
-        input_image = cv2.imread(str(control_file))
-        if input_image is None:
-            raise FileNotFoundError(f"Control image not found or unreadable: {control_file}")
+        if canny_file is not None:
+            canny_map = Image.open(canny_file).convert("RGB")
+            control_w, control_h = canny_map.size
+            print(f"[info] task {task_idx}/{len(tasks)} using manual canny={canny_file}")
+        else:
+            assert control_file is not None
+            input_image = cv2.imread(str(control_file))
+            if input_image is None:
+                raise FileNotFoundError(f"Control image not found or unreadable: {control_file}")
 
-        detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
-        canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
-
-        control_h, control_w = input_image.shape[:2]
+            detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
+            canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
+            control_h, control_w = input_image.shape[:2]
         if use_control_image_size:
             out_width, out_height = control_w, control_h
         else:
@@ -278,13 +303,12 @@ def main() -> None:
             else negative_prompt
         )
 
-        if pairs_jsonl_path and read_prompt_from_jsonl:
-            print(
-                f"[info] task {task_idx}/{len(tasks)} prompt={task_prompt}"
-            )
-            print(
-                f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
-            )
+        print(
+            f"[info] task {task_idx}/{len(tasks)} prompt={task_prompt}"
+        )
+        print(
+            f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
+        )
 
         images = ip_model.generate(
             pil_image=style_image,
@@ -313,7 +337,12 @@ def main() -> None:
                         save_base.with_name(f"{save_base.stem}_s{sample_idx:02d}{save_base.suffix}")
                     )
         else:
-            base_name = f"{task_idx:04d}_sty_{style_file.stem}_cnt_{control_file.stem}"
+            if control_file is not None:
+                content_stem = control_file.stem
+            else:
+                assert canny_file is not None
+                content_stem = canny_file.stem
+            base_name = f"{task_idx:04d}_sty_{style_file.stem}_cnt_{content_stem}"
             save_paths = [output_dir / f"{base_name}.jpg"]
             if len(images) > 1:
                 save_paths = []

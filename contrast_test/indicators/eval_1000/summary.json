@@ -1,0 +1,48 @@
+{
+  "results": [
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_1blk",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "fid": 109.49088621330804,
+      "art_fid": 150.54947010355022,
+      "lpips": 0.566485036790371,
+      "lpips_pairs": 1000,
+      "name": "adain_1blk"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_2blk",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "fid": 128.6184382321162,
+      "art_fid": 145.20653043697212,
+      "lpips": 0.5873380157351494,
+      "lpips_pairs": 1000,
+      "name": "adain_2blk"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_noadain_1blk",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "fid": 113.92484592447875,
+      "art_fid": 146.20399431986277,
+      "lpips": 0.5840361232459546,
+      "lpips_pairs": 1000,
+      "name": "noadain_1blk"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_noadain_2blk",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+      "fid": 131.28193527327142,
+      "art_fid": 141.54363819175592,
+      "lpips": 0.6001383604109287,
+      "lpips_pairs": 1000,
+      "name": "noadain_2blk"
+    }
+  ]
+}

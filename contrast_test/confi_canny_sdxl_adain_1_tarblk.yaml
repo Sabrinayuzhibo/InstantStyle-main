@@ -1,0 +1,48 @@
+paths:
+  base_model_path: /root/autodl-tmp/AI_Models/stable-diffusion-xl-base-1.0
+  controlnet_path: ../diffusers_models/controlnet-canny-sdxl-1.0
+  image_encoder_path: ../sdxl_models/image_encoder
+  ip_ckpt: ../sdxl_models/ip-adapter_sdxl.bin
+  pairs_jsonl: /root/autodl-tmp/InstantStyle-main/contrast_test/dataset/pairs_5000.jsonl
+  output_dir: /root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_1blk_5000
+
+runtime:
+  device: cuda
+  enable_xformers: true
+
+model_loading:
+  controlnet_use_safetensors: false
+
+ip_adapter:
+  target_blocks:
+    - up_blocks.0.attentions.1
+  adain_ip: true
+  adain_alpha: 1.0
+  adain_beta: 1.0
+
+preprocess:
+  canny_low_threshold: 50
+  canny_high_threshold: 200
+
+output:
+  use_control_image_size: true
+  width: null
+  height: null
+
+debug:
+  print_adain_stats: true
+  adain_processor_sample_count: 5
+
+generate:
+  prompt: "best quality, high quality, high detail"
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry, ugly, bad anatomy"
+  read_prompt_from_jsonl: true
+  append_default_prompt_to_jsonl_prompt: true
+  read_negative_prompt_from_jsonl: false
+  resume_if_exists: true
+  scale: 1.0
+  guidance_scale: 5
+  num_samples: 1
+  num_inference_steps: 30
+  seed: 42
+  controlnet_conditioning_scale: 0.6

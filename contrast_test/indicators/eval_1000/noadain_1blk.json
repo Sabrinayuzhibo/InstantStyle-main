@@ -1,0 +1,11 @@
+{
+  "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_noadain_1blk",
+  "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+  "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+  "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+  "fid": 113.92484592447875,
+  "art_fid": 146.20399431986277,
+  "lpips": 0.5840361232459546,
+  "lpips_pairs": 1000,
+  "name": "noadain_1blk"
+}

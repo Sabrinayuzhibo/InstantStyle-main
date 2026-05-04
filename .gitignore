@@ -51,3 +51,9 @@ IP-Adapter
 outputs_*/
 datasets/
 grid_demo
+tmp/
+contrast_test/dataset/
+contrast_test/outputs/
+contrast_test/dataset/wiki_dataset/
+contrast_test/dataset/coco_1000/
+canny_to_use

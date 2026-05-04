@@ -1,0 +1,11 @@
+{
+  "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_2blk",
+  "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+  "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_1000",
+  "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_1000",
+  "fid": 128.6184382321162,
+  "art_fid": 145.20653043697212,
+  "lpips": 0.5873380157351494,
+  "lpips_pairs": 1000,
+  "name": "adain_2blk"
+}
