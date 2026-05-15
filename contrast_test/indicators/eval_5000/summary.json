@@ -44,5 +44,17 @@
       "lpips_pairs": 5000,
       "name": "noadain_2blk"
     }
+  ,
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_only_no_controlnet_1blk_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 70.74989032045767,
+      "art_fid": 104.1167703265869,
+      "lpips": 0.7455327140212059,
+      "lpips_pairs": 5000,
+      "name": "adain_only_no_controlnet_1blk"
+    }
   ]
 }

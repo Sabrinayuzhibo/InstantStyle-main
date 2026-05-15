@@ -1,0 +1,54 @@
+paths:
+  base_model_path: /root/autodl-tmp/AI_Models/stable-diffusion-xl-base-1.0
+  controlnet_path: /root/autodl-tmp/InstantStyle-main/diffusers_models/controlnet-canny-sdxl-1.0
+  image_encoder_path: /root/autodl-tmp/InstantStyle-main/sdxl_models/image_encoder
+  ip_ckpt: /root/autodl-tmp/InstantStyle-main/sdxl_models/ip-adapter_sdxl.bin
+  style_image_path: /root/autodl-tmp/InstantStyle-main/images_test_ref/blue.jpg
+  control_image_path: /root/autodl-tmp/InstantStyle-main/images_content/003.jpg
+  canny_image_path: /root/autodl-tmp/InstantStyle-main/canny_to_use/003_canny.png
+  pairs_jsonl: null
+  output_dir: /root/autodl-tmp/InstantStyle-main/gradio_demo/outputs
+  output_image_path: /root/autodl-tmp/InstantStyle-main/gradio_demo/tmp/result_003.png
+
+runtime:
+  device: cuda
+  enable_xformers: true
+
+model_loading:
+  controlnet_use_safetensors: false
+  base_model_use_safetensors: true
+
+ip_adapter:
+  target_blocks:
+    - up_blocks.0.attentions.1
+  adain_ip: true
+  adain_alpha: 1.0
+  adain_beta: 1.0
+
+preprocess:
+  canny_low_threshold: 50
+  canny_high_threshold: 200
+  bilateral_d: 0
+  bilateral_sigma_color: 50
+  bilateral_sigma_space: 50
+  canny_aperture_size: 3
+  canny_l2gradient: false
+
+output:
+  use_control_image_size: true
+  width: null
+  height: null
+
+debug:
+  print_adain_stats: true
+  adain_processor_sample_count: 5
+
+generate:
+  prompt: "A beautiful woman,blue hair,bright,close-up portrait,blue eyes hand near face, looking at viewer, watercolor painting style, soft pastel colors, light blue tones, aesthetic illustration, masterpiece, best quality, highly detailed"
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry, ugly, bad anatomy"
+  scale: 1.0
+  guidance_scale: 6
+  num_samples: 1
+  num_inference_steps: 30
+  seed: 42
+  controlnet_conditioning_scale: 0.6
