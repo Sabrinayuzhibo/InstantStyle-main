@@ -163,7 +163,13 @@ def _build_pipeline(base_model_path: str, controlnet_path: str, image_encoder_pa
     else:
         print("[info] base_model_variant=None")
 
-    cache_key = (f"{base_model_path}|{controlnet_path}|{image_encoder_path}|{ip_ckpt}|{device}|variant={base_model_variant}|safetensors={base_model_use_safetensors}", use_controlnet)
+    target_blocks_key = tuple(target_blocks)
+    cache_key = (
+        f"{base_model_path}|{controlnet_path}|{image_encoder_path}|{ip_ckpt}|{device}"
+        f"|variant={base_model_variant}|safetensors={base_model_use_safetensors}"
+        f"|target_blocks={target_blocks_key}",
+        use_controlnet,
+    )
     if cache_key in _PIPE_CACHE:
         return _PIPE_CACHE[cache_key]
 
@@ -256,7 +262,7 @@ def _build_pipeline(base_model_path: str, controlnet_path: str, image_encoder_pa
         str(ip_ckpt_path),
         device,
         target_blocks=target_blocks,
-        adain_ip=adain_ip,
+        adain_ip=True,
         adain_alpha=adain_alpha,
         adain_beta=adain_beta,
     )
@@ -292,6 +298,16 @@ def np_image(image: Image.Image):
     return np.array(image.convert("RGB"))
 
 
+def _apply_adain_runtime(ip_model: IPAdapterXL, enabled: bool, alpha: float, beta: float) -> None:
+    for proc in ip_model.pipe.unet.attn_processors.values():
+        if hasattr(proc, "adainIP"):
+            proc.adainIP = enabled
+        if hasattr(proc, "adain_alpha"):
+            proc.adain_alpha = alpha
+        if hasattr(proc, "adain_beta"):
+            proc.adain_beta = beta
+
+
 def _save_metadata(path: Path, cfg: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -301,6 +317,7 @@ def _save_metadata(path: Path, cfg: Dict[str, Any]) -> None:
 def generate_image(
     control_image: Optional[Image.Image],
     style_image: Optional[Image.Image],
+    manual_canny_image: Optional[Image.Image],
     use_controlnet: bool,
     use_adain: bool,
     use_canny_from_input: bool,
@@ -335,11 +352,13 @@ def generate_image(
     target_blocks_text: str,
     adain_alpha: float,
     adain_beta: float,
-) -> Tuple[List[Image.Image], str, str]:
+) -> Tuple[List[str], Optional[str], str, str]:
     if style_image is None:
         raise gr.Error("请先上传 style 图")
-    if use_controlnet and control_image is None:
-        raise gr.Error("启用 ControlNet 时请先上传原图")
+    if use_controlnet and use_canny_from_input and control_image is None:
+        raise gr.Error("启用自动 Canny 时请先上传原图")
+    if use_controlnet and not use_canny_from_input and manual_canny_image is None:
+        raise gr.Error("关闭自动 Canny 时请上传自己的 Canny 图")
 
     target_blocks = [x.strip() for x in target_blocks_text.splitlines() if x.strip()]
     if not target_blocks:
@@ -379,7 +398,8 @@ def generate_image(
                 canny_l2gradient,
             )
         else:
-            canny_image = control_image.convert("RGB")
+            assert manual_canny_image is not None
+            canny_image = manual_canny_image.convert("RGB")
         out_w, out_h = canny_image.size if use_control_image_size else (int(width), int(height))
     else:
         canny_image = None
@@ -390,11 +410,7 @@ def generate_image(
                 raise gr.Error("关闭 ControlNet 时仍需提供宽高，或者勾选“使用输入尺寸”")
             out_w, out_h = int(width), int(height)
 
-    if not use_adain:
-        # 关闭 AdaIN 时，尽量把已有 processor 的 adain 标记清掉，避免复用缓存带来意外影响
-        for proc in ip_model.pipe.unet.attn_processors.values():
-            if hasattr(proc, "adainIP"):
-                proc.adainIP = False
+    _apply_adain_runtime(ip_model, use_adain, adain_alpha, adain_beta)
 
     generate_kwargs = dict(
         pil_image=style_image.convert("RGB"),
@@ -428,12 +444,20 @@ def generate_image(
     style_image.save(style_path)
     if control_image is not None:
         control_image.save(control_path)
+    if manual_canny_image is not None:
+        manual_canny_image.save(run_dir / "manual_canny_input.png", format="PNG")
 
+    canny_preview_path: Optional[str] = None
     if canny_image is not None:
-        canny_image.save(run_dir / "canny_input.png")
+        canny_path = run_dir / "canny_input.png"
+        canny_image.save(canny_path, format="PNG")
+        canny_preview_path = str(canny_path)
 
+    output_paths: List[str] = []
     for idx, img in enumerate(images, start=1):
-        img.save(run_dir / f"output_{idx:02d}.png")
+        save_path = run_dir / f"output_{idx:02d}.png"
+        img.save(save_path, format="PNG")
+        output_paths.append(str(save_path))
 
     used_cfg = {
         "use_controlnet": use_controlnet,
@@ -477,73 +501,88 @@ def generate_image(
     status = (
         f"保存到: {run_dir}\n"
         f"ControlNet={'开启' if use_controlnet else '关闭'} | AdaIN={'开启' if use_adain else '关闭'} | "
-        f"Canny={'输入图生成' if use_controlnet and use_canny_from_input else '直接使用输入图' if use_controlnet else '跳过'}"
+        f"Canny={'输入图生成' if use_controlnet and use_canny_from_input else '手动上传' if use_controlnet else '跳过'}"
     )
-    return images, str(run_dir), status
+    return output_paths, canny_preview_path, str(run_dir), status
 
 
 THEME_CSS = """
 :root {
-  --ink: #f7efe3;
-  --muted: #b9aa9a;
-  --panel: rgba(28, 25, 24, 0.78);
-  --panel-strong: rgba(38, 34, 31, 0.92);
-  --line: rgba(255, 238, 214, 0.14);
-  --gold: #f3b65f;
-  --coral: #ff6f61;
-  --cyan: #55d6be;
+  --ink: #f6fbfa;
+  --muted: rgba(246, 251, 250, 0.76);
+  --panel: rgba(29, 23, 36, 0.74);
+  --panel-strong: rgba(23, 19, 30, 0.9);
+  --line: rgba(142, 235, 215, 0.16);
+  --purple: #4b1559;
+  --green: #24917a;
+  --mint: #6ec4b2;
+  --light-mint: #7edec9;
+  --bright: #8febd7;
+}
+html, body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+  background: linear-gradient(135deg, #120e18 0%, #1b1322 42%, #10231f 100%) !important;
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Helvetica Neue", sans-serif !important;
+}
+body {
+  color: var(--ink) !important;
 }
 .gradio-container {
-  max-width: 1500px !important;
-  margin: 0 auto !important;
-  color: var(--ink) !important;
+  width: 100vw !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
   background:
-    radial-gradient(circle at 12% 8%, rgba(255, 111, 97, 0.22), transparent 32%),
-    radial-gradient(circle at 86% 12%, rgba(85, 214, 190, 0.18), transparent 30%),
-    linear-gradient(135deg, #15110f 0%, #241b17 45%, #0f1716 100%) !important;
+    radial-gradient(circle at 8% 12%, rgba(75, 21, 89, 0.52), transparent 26%),
+    radial-gradient(circle at 88% 10%, rgba(36, 145, 122, 0.34), transparent 24%),
+    radial-gradient(circle at 70% 88%, rgba(142, 235, 215, 0.18), transparent 24%),
+    linear-gradient(135deg, #120e18 0%, #1b1322 42%, #10231f 100%) !important;
 }
 #instantstyle-shell {
-  padding: 24px 22px 34px;
+  width: 100%;
+  padding: 18px 18px 26px;
+  box-sizing: border-box;
 }
 .hero-card {
   border: 1px solid var(--line);
   border-radius: 28px;
-  padding: 28px 32px;
-  margin-bottom: 22px;
-  background:
-    linear-gradient(135deg, rgba(243, 182, 95, 0.16), rgba(85, 214, 190, 0.08)),
-    rgba(20, 17, 15, 0.72);
-  box-shadow: 0 30px 90px rgba(0,0,0,0.35);
+  padding: 26px 28px;
+  margin-bottom: 18px;
+  background: linear-gradient(135deg, rgba(75, 21, 89, 0.55), rgba(36, 145, 122, 0.18));
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
 }
 .hero-title {
   margin: 0;
-  font-size: 42px;
+  font-size: 38px;
   line-height: 1.05;
-  letter-spacing: -0.04em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   color: var(--ink);
 }
 .hero-subtitle {
-  margin: 12px 0 0;
-  max-width: 860px;
+  margin: 10px 0 0;
+  max-width: 980px;
   color: var(--muted);
   font-size: 15px;
+  line-height: 1.55;
 }
 .pill-row {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 .pill {
-  border: 1px solid rgba(243, 182, 95, 0.28);
+  border: 1px solid rgba(142, 235, 215, 0.28);
   border-radius: 999px;
   padding: 7px 12px;
-  color: #ffe6bd;
-  background: rgba(243, 182, 95, 0.08);
+  color: #e9fffb;
+  background: rgba(36, 145, 122, 0.18);
   font-size: 12px;
-}
-.block, .form, .panel {
-  border-color: var(--line) !important;
 }
 .card-panel {
   border: 1px solid var(--line) !important;
@@ -551,6 +590,7 @@ THEME_CSS = """
   padding: 18px !important;
   background: var(--panel) !important;
   box-shadow: 0 18px 50px rgba(0,0,0,0.22) !important;
+  backdrop-filter: blur(10px);
 }
 .accordion {
   border-radius: 18px !important;
@@ -558,23 +598,39 @@ THEME_CSS = """
   border: 1px solid var(--line) !important;
 }
 button.primary, .primary {
-  background: linear-gradient(135deg, var(--gold), var(--coral)) !important;
-  color: #1b100b !important;
+  background: linear-gradient(135deg, var(--purple), var(--green)) !important;
+  color: white !important;
   border: 0 !important;
-  font-weight: 800 !important;
+  font-weight: 700 !important;
   border-radius: 16px !important;
-  box-shadow: 0 12px 34px rgba(255,111,97,0.25) !important;
+  box-shadow: 0 12px 34px rgba(36, 145, 122, 0.28) !important;
 }
 textarea, input, select {
   border-radius: 14px !important;
 }
 #result-gallery {
   border-radius: 24px !important;
-  overflow: hidden;
+  min-height: 980px !important;
+  overflow: visible !important;
+}
+#result-gallery .grid-wrap,
+#result-gallery .grid-container,
+#result-gallery .thumbnail-item,
+#result-gallery figure {
+  min-height: 840px !important;
+}
+#result-gallery img {
+  width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  object-fit: contain !important;
+}
+.gradio-image, .image-container {
+  background: rgba(18, 14, 24, 0.72) !important;
 }
 """
 
-with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.Soft(primary_hue="orange", neutral_hue="stone")) as demo:
+with gr.Blocks(title="InstantStyle Gradio Demo") as demo:
     with gr.Column(elem_id="instantstyle-shell"):
         gr.HTML(
             """
@@ -592,7 +648,7 @@ with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.
         )
 
         with gr.Row(equal_height=False):
-            with gr.Column(scale=5, elem_classes="card-panel"):
+            with gr.Column(scale=3, elem_classes="card-panel"):
                 gr.Markdown("### 输入与核心开关")
                 with gr.Row():
                     control_image = gr.Image(label="输入原图 / Control 图", type="pil", height=330)
@@ -602,6 +658,9 @@ with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.
                     use_controlnet = gr.Checkbox(value=True, label="使用 ControlNet")
                     use_adain = gr.Checkbox(value=DEFAULT_ADAIN_IP, label="使用 AdaIN")
                     use_canny_from_input = gr.Checkbox(value=True, label="原图自动生成 Canny")
+
+                with gr.Column(visible=False) as manual_canny_panel:
+                    manual_canny_image = gr.Image(label="手动上传 Canny 图", type="pil", height=300)
 
                 prompt = gr.Textbox(label="Prompt", value=DEFAULT_PROMPT, lines=3)
                 negative_prompt = gr.Textbox(label="Negative Prompt", value=DEFAULT_NEGATIVE_PROMPT, lines=2)
@@ -614,15 +673,16 @@ with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.
                     scale = gr.Slider(0.0, 2.0, value=DEFAULT_SCALE, step=0.01, label="IP-Adapter Scale")
                     guidance_scale = gr.Slider(1.0, 20.0, value=DEFAULT_GUIDANCE_SCALE, step=0.1, label="Guidance")
 
-            with gr.Column(scale=3, elem_classes="card-panel"):
+            with gr.Column(scale=7, elem_classes="card-panel"):
                 gr.Markdown("### 生成结果")
                 run_btn = gr.Button("开始生成", variant="primary", size="lg")
-                result_gallery = gr.Gallery(label="输出图像", columns=2, height=520, elem_id="result-gallery")
+                result_gallery = gr.Gallery(label="输出图像", columns=1, height=860, elem_id="result-gallery")
+                canny_preview = gr.Image(label="Canny 预览 / 当前 ControlNet 输入", type="filepath", height=320)
                 run_dir = gr.Textbox(label="本次输出目录", interactive=False)
                 status = gr.Textbox(label="状态", interactive=False, lines=3)
 
         with gr.Row():
-            with gr.Column(scale=1, elem_classes="card-panel"):
+            with gr.Column(scale=1, elem_classes="card-panel") as canny_params_panel:
                 with gr.Accordion("ControlNet / Canny 参数", open=True):
                     controlnet_conditioning_scale = gr.Slider(0.0, 2.0, value=DEFAULT_CONTROLNET_COND_SCALE, step=0.01, label="ControlNet Conditioning Scale")
                     with gr.Row():
@@ -658,11 +718,27 @@ with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.
                     base_model_variant = gr.Textbox(value=DEFAULT_BASE_MODEL_VARIANT or "", label="Base model variant（可空）")
                     base_model_use_safetensors = gr.Checkbox(value=DEFAULT_BASE_MODEL_USE_SAFETENSORS, label="Base model 使用 safetensors")
 
+    def toggle_canny_mode(auto_canny: bool):
+        return (
+            gr.update(visible=auto_canny),
+            gr.update(visible=not auto_canny),
+            None,
+            None,
+            "已切换为自动生成 Canny" if auto_canny else "已切换为手动上传 Canny，请上传 Canny 图后再生成",
+        )
+
+    use_canny_from_input.change(
+        fn=toggle_canny_mode,
+        inputs=[use_canny_from_input],
+        outputs=[canny_params_panel, manual_canny_panel, canny_preview, result_gallery, status],
+    )
+
     run_btn.click(
         fn=generate_image,
         inputs=[
             control_image,
             style_image,
+            manual_canny_image,
             use_controlnet,
             use_adain,
             use_canny_from_input,
@@ -698,9 +774,43 @@ with gr.Blocks(title="InstantStyle Gradio Demo", css=THEME_CSS, theme=gr.themes.
             adain_alpha,
             adain_beta,
         ],
-        outputs=[result_gallery, run_dir, status],
+        outputs=[result_gallery, canny_preview, run_dir, status],
     )
 
 
+def preload_default_pipelines() -> None:
+    target_blocks = [str(x).strip() for x in DEFAULT_TARGET_BLOCKS if str(x).strip()]
+    if not target_blocks:
+        target_blocks = ["up_blocks.0.attentions.1"]
+    try:
+        print("[info] preloading default ControlNet pipeline...")
+        _build_pipeline(
+            base_model_path=str(DEFAULT_BASE_MODEL_PATH),
+            controlnet_path=str(DEFAULT_CONTROLNET_PATH),
+            image_encoder_path=str(DEFAULT_IMAGE_ENCODER_PATH),
+            ip_ckpt=str(DEFAULT_IP_CKPT),
+            device=DEFAULT_DEVICE,
+            use_controlnet=True,
+            controlnet_use_safetensors=DEFAULT_CONTROLNET_USE_SAFETENSORS,
+            base_model_variant=DEFAULT_BASE_MODEL_VARIANT,
+            base_model_use_safetensors=DEFAULT_BASE_MODEL_USE_SAFETENSORS,
+            enable_xformers=DEFAULT_ENABLE_XFORMERS,
+            target_blocks=target_blocks,
+            adain_ip=DEFAULT_ADAIN_IP,
+            adain_alpha=DEFAULT_ADAIN_ALPHA,
+            adain_beta=DEFAULT_ADAIN_BETA,
+        )
+        print("[info] default ControlNet pipeline preloaded")
+    except Exception as exc:
+        print(f"[warn] failed to preload default ControlNet pipeline: {exc}")
+
+
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    preload_default_pipelines()
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        theme=gr.themes.Soft(primary_hue="teal", neutral_hue="slate"),
+        css=THEME_CSS,
+        allowed_paths=[str(REPO_ROOT), str(SCRIPT_DIR), str(DEFAULT_OUTPUT_DIR)],
+    )
