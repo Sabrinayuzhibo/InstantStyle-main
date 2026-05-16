@@ -14,10 +14,10 @@ paths:
   # 可选：直接指定现成 Canny 图；设置后优先使用该图，不再从 control_image_path 现算
   canny_image_path: /root/autodl-tmp/InstantStyle-main/canny_to_use/003_canny_low.png
   # 批量任务文件（jsonl），每行一个对象：{"style_image_path": "...", "control_image_path": "..."}
-  pairs_jsonl: null
+  pairs_jsonl: /root/autodl-tmp/InstantStyle-main/experimental_demo/style_injection_batch.jsonl
   # experimental_demo 输出目录；若未设置则回退到 output_image_path 的父目录
   output_dir: /root/autodl-tmp/InstantStyle-main/experimental_demo/outputs_sdxl
-  output_image_path: /root/autodl-tmp/InstantStyle-main/experimental_demo/tmp/result_003.png
+  output_image_path: /root/autodl-tmp/InstantStyle-main/experimental_demo/tmp/10processor/result_003_adain.png
 
 runtime:
   # 推理设备：cuda/cpu
@@ -57,6 +57,28 @@ debug:
   print_adain_stats: true
   # 输出命中的 AdaIN processor 样本数量
   adain_processor_sample_count: 5
+
+style_injection:
+  enabled: true
+  # 精确指定若干个 self-attention processor。
+  processor_names:
+    - up_blocks.0.attentions.1.transformer_blocks.0.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.1.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.2.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.3.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.4.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.5.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.6.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.7.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.8.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.9.attn1.processor
+  attention: self
+  mode: blend
+  components: key_value
+  match_stats: false
+  gamma: 0.5
+  per_timestep_style_forward: true
+  style_forward_noise_strength: 1.0
 
 generate:
   prompt: "A beautiful woman,blue hair,bright,close-up portrait,blue eyes hand near face, looking at viewer, watercolor painting style, soft pastel colors, light blue tones, aesthetic illustration, masterpiece, best quality, highly detailed"

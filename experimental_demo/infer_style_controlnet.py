@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from diffusers.models.controlnets.controlnet import ControlNetModel
 from diffusers.pipelines.controlnet.pipeline_controlnet_sd_xl import (
     StableDiffusionXLControlNetPipeline,
@@ -21,6 +23,135 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ip_adapter import IPAdapterXL
+
+
+class StyleKVInjectionController:
+    def __init__(self, mode: str = "replace", gamma: float = 1.0, components: str = "value", match_stats: bool = False) -> None:
+        if mode not in {"replace", "blend"}:
+            raise ValueError("style_injection.mode must be 'replace' or 'blend'")
+        if components not in {"key_value", "value"}:
+            raise ValueError("style_injection.components must be 'key_value' or 'value'")
+        self.mode = mode
+        self.gamma = float(gamma)
+        self.components = components
+        self.match_stats = bool(match_stats)
+        self.phase = "content"
+        self.current_timestep: Optional[int] = None
+        self.cache: Dict[int, Dict[str, torch.Tensor]] = {}
+        self.capture_calls = 0
+        self.inject_calls = 0
+        self.total_key_delta = 0.0
+        self.total_value_delta = 0.0
+        self.total_key_delta = 0.0
+        self.total_value_delta = 0.0
+
+    def set_phase(self, phase: str) -> None:
+        self.phase = phase
+
+    def set_timestep(self, timestep: Any) -> None:
+        if isinstance(timestep, torch.Tensor):
+            timestep = timestep.detach().flatten()[0].item()
+        self.current_timestep = int(timestep)
+
+    def store(self, key: torch.Tensor, value: torch.Tensor) -> None:
+        if self.current_timestep is None:
+            return
+        self.cache[self.current_timestep] = {
+            "key": key.detach().clone(),
+            "value": value.detach().clone(),
+        }
+        self.capture_calls += 1
+
+    def get(self) -> Optional[Dict[str, torch.Tensor]]:
+        if self.current_timestep is None:
+            return None
+        return self.cache.get(self.current_timestep)
+
+
+class StyleKVSelfAttnProcessor(nn.Module):
+    def __init__(self, controller: StyleKVInjectionController) -> None:
+        super().__init__()
+        self.controller = controller
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
+        residual = hidden_states
+
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = hidden_states.shape
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(hidden_states)
+        value = attn.to_v(hidden_states)
+
+        inner_dim = key.shape[-1]
+        head_dim = inner_dim // attn.heads
+        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+        if self.controller.phase == "style":
+            self.controller.store(key, value)
+        elif self.controller.phase == "content":
+            cached = self.controller.get()
+            if cached is not None and cached["key"].shape == key.shape and cached["value"].shape == value.shape:
+                style_key = cached["key"].to(device=key.device, dtype=key.dtype)
+                style_value = cached["value"].to(device=value.device, dtype=value.dtype)
+
+                if self.controller.match_stats:
+                    style_key = self._match_stats(style_key, key)
+                    style_value = self._match_stats(style_value, value)
+                style_key = torch.nan_to_num(style_key, nan=0.0, posinf=0.0, neginf=0.0)
+                style_value = torch.nan_to_num(style_value, nan=0.0, posinf=0.0, neginf=0.0)
+
+                old_key = key
+                old_value = value
+                gamma = self.controller.gamma
+                if self.controller.components == "key_value":
+                    key = (1.0 - gamma) * key + gamma * style_key
+                value = (1.0 - gamma) * value + gamma * style_value
+                self.controller.total_key_delta += float((key - old_key).abs().mean().detach().cpu())
+                self.controller.total_value_delta += float((value - old_value).abs().mean().detach().cpu())
+                self.controller.inject_calls += 1
+
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        )
+        hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=0.0, neginf=0.0)
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        hidden_states = hidden_states.to(query.dtype)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+        hidden_states = hidden_states / attn.rescale_output_factor
+        return hidden_states
+
+    @staticmethod
+    def _match_stats(source: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+        reduce_dims = tuple(range(2, source.ndim))
+        source_mean = source.mean(dim=reduce_dims, keepdim=True)
+        source_std = source.std(dim=reduce_dims, keepdim=True).clamp_min(1e-6)
+        ref_mean = reference.mean(dim=reduce_dims, keepdim=True)
+        ref_std = reference.std(dim=reduce_dims, keepdim=True).clamp_min(1e-6)
+        return (source - source_mean) / source_std * ref_std + ref_mean
 
 
 def _get_device(requested: Optional[str]) -> str:
@@ -113,6 +244,7 @@ def main() -> None:
     debug_cfg = cfg.get("debug", {})
     ip_adapter_cfg = cfg.get("ip_adapter", {})
     model_loading_cfg = cfg.get("model_loading", {})
+    style_injection_cfg = cfg.get("style_injection", {})
 
     # Allow env vars as fallback when config is omitted.
     base_model_path = paths_cfg.get(
@@ -171,6 +303,26 @@ def main() -> None:
     print_adain_stats = bool(debug_cfg.get("print_adain_stats", False))
     adain_sample_count = int(debug_cfg.get("adain_processor_sample_count", 5))
 
+    style_injection_enabled = bool(style_injection_cfg.get("enabled", False))
+    default_processor_names_cfg = style_injection_cfg.get("processor_names")
+    if default_processor_names_cfg is None:
+        default_processor_names_cfg = [
+            style_injection_cfg.get(
+                "processor_name",
+                "up_blocks.0.attentions.1.transformer_blocks.0.attn1.processor",
+            )
+        ]
+    if isinstance(default_processor_names_cfg, str):
+        default_style_injection_processor_names = [default_processor_names_cfg]
+    else:
+        default_style_injection_processor_names = [str(name) for name in default_processor_names_cfg]
+    style_injection_mode = str(style_injection_cfg.get("mode", "replace"))
+    style_injection_gamma = float(style_injection_cfg.get("gamma", 1.0))
+    style_injection_components = str(style_injection_cfg.get("components", "value"))
+    style_injection_match_stats = bool(style_injection_cfg.get("match_stats", False))
+    per_timestep_style_forward = bool(style_injection_cfg.get("per_timestep_style_forward", True))
+    style_injection_strength = float(style_injection_cfg.get("style_forward_noise_strength", 1.0))
+
     base_model_dir = _require_exists(_resolve_path(str(base_model_path), config_base_dir), "Base model directory")
     if not (base_model_dir / "model_index.json").exists():
         raise FileNotFoundError(
@@ -211,6 +363,17 @@ def main() -> None:
                 print(f"[warn] failed to enable xformers memory efficient attention: {exc}")
     pipe.vae.enable_tiling()
 
+    style_controller: Optional[StyleKVInjectionController] = None
+    if style_injection_enabled:
+        style_controller = StyleKVInjectionController(
+            mode=style_injection_mode,
+            gamma=style_injection_gamma,
+            components=style_injection_components,
+            match_stats=style_injection_match_stats,
+        )
+
+    original_unet_forward = pipe.unet.forward
+
     ip_model = IPAdapterXL(
         pipe,
         str(image_encoder_dir),
@@ -221,6 +384,30 @@ def main() -> None:
         adain_alpha=adain_alpha,
         adain_beta=adain_beta,
     )
+
+    original_attn_processors = dict(ip_model.pipe.unet.attn_processors)
+
+    def apply_style_processors(processor_names: List[str]) -> List[str]:
+        if style_controller is None:
+            return []
+        patched_processors = {}
+        matched = []
+        target_processor_set = set(processor_names)
+        for proc_name, proc in original_attn_processors.items():
+            if proc_name in target_processor_set:
+                patched_processors[proc_name] = StyleKVSelfAttnProcessor(style_controller)
+                matched.append(proc_name)
+            else:
+                patched_processors[proc_name] = proc
+        ip_model.pipe.unet.set_attn_processor(patched_processors)
+        missing = sorted(target_processor_set - set(matched))
+        if missing:
+            print(f"[style_injection][warn] target processors not found: {missing}")
+        return matched
+
+    default_matched = apply_style_processors(default_style_injection_processor_names) if style_controller is not None else []
+    if style_controller is not None:
+        print(f"[style_injection] default_matched_processors={default_matched}")
 
     adain_enabled_processors: List[str] = []
     if print_adain_stats:
@@ -319,6 +506,82 @@ def main() -> None:
             f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
         )
 
+        task_adain_ip = bool(task.get("adain_ip", adain_ip))
+        task_gamma = float(task.get("style_injection_gamma", style_injection_gamma))
+        task_components = str(task.get("style_injection_components", style_injection_components))
+        task_match_stats = bool(task.get("style_injection_match_stats", style_injection_match_stats))
+        task_processor_names_cfg = task.get("style_injection_processor_names", default_style_injection_processor_names)
+        if isinstance(task_processor_names_cfg, str):
+            task_processor_names = [task_processor_names_cfg]
+        else:
+            task_processor_names = [str(name) for name in task_processor_names_cfg]
+
+        for proc in ip_model.pipe.unet.attn_processors.values():
+            if hasattr(proc, "adainIP"):
+                proc.adainIP = task_adain_ip
+            if hasattr(proc, "adain_call_count"):
+                proc.adain_call_count = 0
+
+        if style_controller is not None:
+            style_controller.gamma = task_gamma
+            style_controller.components = task_components
+            style_controller.match_stats = task_match_stats
+            style_controller.cache.clear()
+            style_controller.capture_calls = 0
+            style_controller.inject_calls = 0
+            style_controller.total_key_delta = 0.0
+            style_controller.total_value_delta = 0.0
+            matched = apply_style_processors(task_processor_names)
+            print(
+                f"[style_injection] task={task_idx} adain={task_adain_ip} gamma={task_gamma:g} "
+                f"components={task_components} match_stats={task_match_stats} processors={len(matched)}"
+            )
+
+        if style_controller is not None and per_timestep_style_forward:
+            style_tensor = torch.from_numpy(cv2.cvtColor(cv2.imread(str(style_file)), cv2.COLOR_BGR2RGB)).to(device=device, dtype=torch_dtype)
+            style_tensor = style_tensor.permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0
+            style_tensor = torch.nn.functional.interpolate(style_tensor, size=(out_height, out_width), mode="bilinear", align_corners=False)
+            with torch.no_grad():
+                style_latents = pipe.vae.encode(style_tensor).latent_dist.sample()
+                style_latents = style_latents * pipe.vae.config.scaling_factor
+
+            def style_injection_unet_forward(sample, timestep, *forward_args, **forward_kwargs):
+                assert style_controller is not None
+                style_controller.set_timestep(timestep)
+                sigma = 0.0
+                if hasattr(pipe.scheduler, "sigmas"):
+                    timestep_value = int(timestep.detach().flatten()[0].item()) if isinstance(timestep, torch.Tensor) else int(timestep)
+                    for idx, scheduler_timestep in enumerate(pipe.scheduler.timesteps):
+                        if int(scheduler_timestep.item()) == timestep_value:
+                            sigma = float(pipe.scheduler.sigmas[idx].item())
+                            break
+                style_latents_for_step = style_latents
+                if style_latents_for_step.shape[0] != sample.shape[0]:
+                    repeats = (sample.shape[0] + style_latents_for_step.shape[0] - 1) // style_latents_for_step.shape[0]
+                    style_latents_for_step = style_latents_for_step.repeat(repeats, 1, 1, 1)[: sample.shape[0]]
+                noise = torch.randn_like(style_latents_for_step)
+                style_noisy_latents = style_latents_for_step + noise * sigma
+                style_noisy_latents = style_noisy_latents / ((sigma ** 2 + 1.0) ** 0.5)
+                style_noisy_latents = torch.nan_to_num(style_noisy_latents, nan=0.0, posinf=0.0, neginf=0.0)
+
+                style_kwargs = dict(forward_kwargs)
+                style_kwargs.pop("down_block_additional_residuals", None)
+                style_kwargs.pop("mid_block_additional_residual", None)
+                style_kwargs.pop("down_intrablock_additional_residuals", None)
+                if style_noisy_latents.shape[0] != sample.shape[0]:
+                    repeats = sample.shape[0]
+                    style_noisy_latents_for_forward = style_noisy_latents.repeat(repeats, 1, 1, 1)
+                else:
+                    style_noisy_latents_for_forward = style_noisy_latents
+                style_controller.set_phase("style")
+                with torch.no_grad():
+                    original_unet_forward(style_noisy_latents_for_forward, timestep, *forward_args, **style_kwargs)
+                style_controller.set_phase("content")
+                style_controller.set_timestep(timestep)
+                return original_unet_forward(sample, timestep, *forward_args, **forward_kwargs)
+
+            pipe.unet.forward = style_injection_unet_forward
+
         images = ip_model.generate(
             pil_image=style_image,
             prompt=task_prompt,
@@ -333,6 +596,16 @@ def main() -> None:
             image=canny_map,
             controlnet_conditioning_scale=controlnet_conditioning_scale,
         )
+
+        if style_controller is not None and per_timestep_style_forward:
+            pipe.unet.forward = original_unet_forward
+            avg_key_delta = style_controller.total_key_delta / max(style_controller.inject_calls, 1)
+            avg_value_delta = style_controller.total_value_delta / max(style_controller.inject_calls, 1)
+            print(
+                f"[style_injection] capture_calls={style_controller.capture_calls}, "
+                f"inject_calls={style_controller.inject_calls}, cached_timesteps={len(style_controller.cache)}, "
+                f"gamma={style_controller.gamma}, avg_key_delta={avg_key_delta:.8f}, avg_value_delta={avg_value_delta:.8f}"
+            )
 
         custom_output = task.get("output_image_path")
         if custom_output:
