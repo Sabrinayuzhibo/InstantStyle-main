@@ -43,8 +43,7 @@
       "lpips": 0.6122048333227634,
       "lpips_pairs": 5000,
       "name": "noadain_2blk"
-    }
-  ,
+    },
     {
       "gen_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/outputs/outputs_adain_only_no_controlnet_1blk_5000",
       "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
@@ -55,6 +54,28 @@
       "lpips": 0.7455327140212059,
       "lpips_pairs": 5000,
       "name": "adain_only_no_controlnet_1blk"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adaintrue_gamma0.6_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 78.48186948174924,
+      "art_fid": 90.76308528252991,
+      "lpips": 0.5990731678187847,
+      "lpips_pairs": 5000,
+      "name": "proc05_adaintrue_gamma0.6"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.6_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 78.14455511564324,
+      "art_fid": 85.43033501871918,
+      "lpips": 0.6284685461640358,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.6"
     }
   ]
 }

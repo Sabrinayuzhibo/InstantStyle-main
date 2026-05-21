@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,9 +42,65 @@ class PipelineBundle:
     ip_model: IPAdapterXL
     device: str
     has_controlnet: bool
+    target_blocks: Tuple[str, ...]
 
 
-_PIPE_CACHE: Dict[Tuple[str, bool], PipelineBundle] = {}
+_PIPE_CACHE_KEY: Optional[Tuple[str, bool]] = None
+_PIPE_CACHE_BUNDLE: Optional[PipelineBundle] = None
+CACHE_RELEASE_WAIT_SECONDS = float(os.environ.get("INSTANTSTYLE_CACHE_RELEASE_WAIT_SECONDS", "12"))
+
+
+def _cuda_memory_summary() -> str:
+    if not torch.cuda.is_available():
+        return "cuda unavailable"
+    free_bytes, total_bytes = torch.cuda.mem_get_info()
+    allocated = torch.cuda.memory_allocated()
+    reserved = torch.cuda.memory_reserved()
+    gib = 1024 ** 3
+    return (
+        f"free={free_bytes / gib:.2f}GiB/{total_bytes / gib:.2f}GiB, "
+        f"allocated={allocated / gib:.2f}GiB, reserved={reserved / gib:.2f}GiB"
+    )
+
+
+def _release_cuda_memory(wait_seconds: float = CACHE_RELEASE_WAIT_SECONDS) -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+    if wait_seconds > 0:
+        print(f"[info] waiting {wait_seconds:g}s for CUDA/Python memory release...")
+        time.sleep(wait_seconds)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
+
+def _release_pipeline_cache(except_key: Optional[Tuple[str, bool]] = None) -> None:
+    global _PIPE_CACHE_KEY, _PIPE_CACHE_BUNDLE
+
+    if _PIPE_CACHE_BUNDLE is None:
+        if except_key is None:
+            _PIPE_CACHE_KEY = None
+        return
+
+    if except_key is not None and _PIPE_CACHE_KEY == except_key:
+        return
+
+    stale_key = _PIPE_CACHE_KEY
+    bundle = _PIPE_CACHE_BUNDLE
+    print(f"[info] releasing stale pipeline cache; before release: {_cuda_memory_summary()}")
+    _PIPE_CACHE_KEY = None
+    _PIPE_CACHE_BUNDLE = None
+    del bundle
+
+    _release_cuda_memory()
+
+    if stale_key is not None:
+        print(f"[info] released stale pipeline cache before loading new configuration; after release: {_cuda_memory_summary()}")
 
 
 def _get_device(requested: Optional[str]) -> str:
@@ -156,6 +214,17 @@ DEFAULT_BASE_MODEL_VARIANT = _normalize_optional_str(MODEL_LOADING_CFG.get("base
 DEFAULT_BASE_MODEL_USE_SAFETENSORS = bool(MODEL_LOADING_CFG.get("base_model_use_safetensors", True))
 
 
+def _reconfigure_ip_adapter(ip_model: IPAdapterXL, target_blocks: List[str], adain_ip: bool, adain_alpha: float, adain_beta: float) -> None:
+    ip_model.target_blocks = target_blocks
+    ip_model.adain_ip = adain_ip
+    ip_model.adain_alpha = adain_alpha
+    ip_model.adain_beta = adain_beta
+    ip_model.set_ip_adapter()
+    ip_model.load_ip_adapter()
+    _release_cuda_memory(wait_seconds=1.0)
+    print(f"[info] reconfigured IP-Adapter target_blocks={tuple(target_blocks)} without reloading SDXL pipeline; memory: {_cuda_memory_summary()}")
+
+
 def _build_pipeline(base_model_path: str, controlnet_path: str, image_encoder_path: str, ip_ckpt: str, device: str, use_controlnet: bool, controlnet_use_safetensors: bool, base_model_variant: Optional[str], base_model_use_safetensors: bool, enable_xformers: bool, target_blocks: List[str], adain_ip: bool, adain_alpha: float, adain_beta: float) -> PipelineBundle:
     base_model_variant = _normalize_optional_str(base_model_variant)
     if base_model_variant:
@@ -166,12 +235,20 @@ def _build_pipeline(base_model_path: str, controlnet_path: str, image_encoder_pa
     target_blocks_key = tuple(target_blocks)
     cache_key = (
         f"{base_model_path}|{controlnet_path}|{image_encoder_path}|{ip_ckpt}|{device}"
-        f"|variant={base_model_variant}|safetensors={base_model_use_safetensors}"
-        f"|target_blocks={target_blocks_key}",
+        f"|variant={base_model_variant}|safetensors={base_model_use_safetensors}",
         use_controlnet,
     )
-    if cache_key in _PIPE_CACHE:
-        return _PIPE_CACHE[cache_key]
+    global _PIPE_CACHE_KEY, _PIPE_CACHE_BUNDLE
+    if _PIPE_CACHE_KEY == cache_key and _PIPE_CACHE_BUNDLE is not None:
+        if _PIPE_CACHE_BUNDLE.target_blocks != target_blocks_key:
+            _reconfigure_ip_adapter(_PIPE_CACHE_BUNDLE.ip_model, target_blocks, adain_ip, adain_alpha, adain_beta)
+            _PIPE_CACHE_BUNDLE.target_blocks = target_blocks_key
+        return _PIPE_CACHE_BUNDLE
+
+    # Keep only one SDXL pipeline resident. Changing target_blocks, ControlNet
+    # mode, or model paths otherwise accumulates multiple full pipelines and can
+    # make the OS kill the Gradio process while loading the new configuration.
+    _release_pipeline_cache()
 
     torch_device = torch.device(device)
     torch_dtype = torch.float16 if device == "cuda" else torch.float32
@@ -267,8 +344,9 @@ def _build_pipeline(base_model_path: str, controlnet_path: str, image_encoder_pa
         adain_beta=adain_beta,
     )
 
-    bundle = PipelineBundle(pipe=pipe, ip_model=ip_model, device=device, has_controlnet=controlnet is not None)
-    _PIPE_CACHE[cache_key] = bundle
+    bundle = PipelineBundle(pipe=pipe, ip_model=ip_model, device=device, has_controlnet=controlnet is not None, target_blocks=target_blocks_key)
+    _PIPE_CACHE_KEY = cache_key
+    _PIPE_CACHE_BUNDLE = bundle
     return bundle
 
 
@@ -312,6 +390,24 @@ def _save_metadata(path: Path, cfg: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+
+
+def _round_to_multiple_of_8(value: int) -> int:
+    return max(8, int(round(value / 8)) * 8)
+
+
+def _normalize_sdxl_size(width: int, height: int) -> Tuple[int, int]:
+    """SDXL pipelines require both dimensions to be divisible by 8."""
+    return _round_to_multiple_of_8(width), _round_to_multiple_of_8(height)
+
+
+def _upscale_to_sdxl_canvas(width: int, height: int, target_long_side: int = 1024) -> Tuple[int, int]:
+    """Keep aspect ratio but avoid tiny SDXL canvases that collapse into artifacts."""
+    long_side = max(width, height)
+    if long_side >= target_long_side:
+        return width, height
+    scale = target_long_side / long_side
+    return int(round(width * scale)), int(round(height * scale))
 
 
 def generate_image(
@@ -400,15 +496,21 @@ def generate_image(
         else:
             assert manual_canny_image is not None
             canny_image = manual_canny_image.convert("RGB")
-        out_w, out_h = canny_image.size if use_control_image_size else (int(width), int(height))
+        raw_w, raw_h = canny_image.size if use_control_image_size else (int(width), int(height))
     else:
         canny_image = None
         if use_control_image_size:
-            out_w, out_h = style_image.size
+            raw_w, raw_h = _upscale_to_sdxl_canvas(*style_image.size)
         else:
             if width is None or height is None:
                 raise gr.Error("关闭 ControlNet 时仍需提供宽高，或者勾选“使用输入尺寸”")
-            out_w, out_h = int(width), int(height)
+            raw_w, raw_h = int(width), int(height)
+
+    out_w, out_h = _normalize_sdxl_size(raw_w, raw_h)
+    if (out_w, out_h) != (raw_w, raw_h):
+        print(f"[info] adjusted output size from {raw_w}x{raw_h} to {out_w}x{out_h} for SDXL")
+    if not use_controlnet and use_control_image_size and (out_w, out_h) != style_image.size:
+        print(f"[info] upscaled no-ControlNet canvas from style image {style_image.size[0]}x{style_image.size[1]} to {out_w}x{out_h}")
 
     _apply_adain_runtime(ip_model, use_adain, adain_alpha, adain_beta)
 
@@ -425,6 +527,7 @@ def generate_image(
         height=out_h,
     )
     if use_controlnet:
+        assert canny_image is not None
         generate_kwargs["image"] = canny_image
         generate_kwargs["controlnet_conditioning_scale"] = controlnet_conditioning_scale
 
@@ -704,6 +807,7 @@ with gr.Blocks(title="InstantStyle Gradio Demo") as demo:
                         height = gr.Number(value=DEFAULT_HEIGHT if DEFAULT_HEIGHT is not None else 1024, label="Height")
                     output_dir = gr.Textbox(value=DEFAULT_OUTPUT_BASE, label="输出目录")
                     target_blocks = gr.Textbox(value="\n".join(DEFAULT_TARGET_BLOCKS), label="target_blocks（每行一个）", lines=3)
+                    target_blocks_notice = gr.Markdown("当前仅使用 1 个 attention block：up_blocks.0.attentions.1")
                     with gr.Row():
                         adain_alpha = gr.Slider(0.0, 1.0, value=DEFAULT_ADAIN_ALPHA, step=0.01, label="AdaIN Alpha")
                         adain_beta = gr.Slider(0.0, 1.0, value=DEFAULT_ADAIN_BETA, step=0.01, label="AdaIN Beta")
@@ -727,10 +831,35 @@ with gr.Blocks(title="InstantStyle Gradio Demo") as demo:
             "已切换为自动生成 Canny" if auto_canny else "已切换为手动上传 Canny，请上传 Canny 图后再生成",
         )
 
+    def update_target_blocks_notice(target_blocks_text: str):
+        lines = [line.strip() for line in target_blocks_text.splitlines() if line.strip()]
+        if not lines:
+            lines = ["up_blocks.0.attentions.1"]
+        if len(lines) == 1:
+            msg = f"当前仅使用 1 个 attention block：{lines[0]}"
+        else:
+            msg = f"当前使用 {len(lines)} 个 attention blocks；仅切换 blocks 时会复用当前 pipeline，只重配 IP-Adapter"
+        return msg
+
+    def toggle_controlnet_notice(enabled: bool):
+        if enabled:
+            return "ControlNet 已开启；如果当前缓存是无 ControlNet pipeline，下一次生成会重载模型。"
+        return "ControlNet 已关闭；将使用真实 no-ControlNet SDXL pipeline，下一次生成可能需要重载模型。"
+
     use_canny_from_input.change(
         fn=toggle_canny_mode,
         inputs=[use_canny_from_input],
         outputs=[canny_params_panel, manual_canny_panel, canny_preview, result_gallery, status],
+    )
+    target_blocks.change(
+        fn=update_target_blocks_notice,
+        inputs=[target_blocks],
+        outputs=[target_blocks_notice],
+    )
+    use_controlnet.change(
+        fn=toggle_controlnet_notice,
+        inputs=[use_controlnet],
+        outputs=[status],
     )
 
     run_btn.click(

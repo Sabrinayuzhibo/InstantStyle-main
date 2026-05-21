@@ -1,0 +1,68 @@
+paths:
+  base_model_path: /root/autodl-tmp/AI_Models/stable-diffusion-xl-base-1.0
+  controlnet_path: /root/autodl-tmp/InstantStyle-main/diffusers_models/controlnet-canny-sdxl-1.0
+  image_encoder_path: /root/autodl-tmp/InstantStyle-main/sdxl_models/image_encoder
+  ip_ckpt: /root/autodl-tmp/InstantStyle-main/sdxl_models/ip-adapter_sdxl.bin
+  style_image_path: /root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000/00000.jpg
+  control_image_path: /root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000/00000.jpg
+  canny_image_path: null
+  pairs_jsonl: /root/autodl-tmp/InstantStyle-main/experimental_demo/proc05_adaintrue_gamma0.6_pairs_5000.jsonl
+  output_dir: /root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adaintrue_gamma0.6_5000
+  output_image_path: /root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adaintrue_gamma0.6_5000/00000.jpg
+
+runtime:
+  device: cuda
+  enable_xformers: true
+
+model_loading:
+  controlnet_use_safetensors: false
+  base_model_variant: null
+  base_model_use_safetensors: true
+
+ip_adapter:
+  target_blocks:
+    - up_blocks.0.attentions.1
+  adain_ip: true
+  adain_alpha: 1.0
+  adain_beta: 1.0
+
+preprocess:
+  canny_low_threshold: 50
+  canny_high_threshold: 200
+
+output:
+  use_control_image_size: true
+  width: null
+  height: null
+
+debug:
+  print_adain_stats: true
+  adain_processor_sample_count: 5
+
+style_injection:
+  enabled: true
+  processor_names:
+    - up_blocks.0.attentions.1.transformer_blocks.0.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.1.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.2.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.3.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.4.attn1.processor
+  attention: self
+  mode: blend
+  components: key_value
+  match_stats: false
+  gamma: 0.6
+  per_timestep_style_forward: true
+  style_forward_noise_strength: 1.0
+
+generate:
+  prompt: "a high quality image"
+  negative_prompt: "text, watermark, lowres, low quality, worst quality, deformed, glitch, low contrast, noisy, saturation, blurry, ugly, bad anatomy"
+  scale: 1.0
+  guidance_scale: 6
+  num_samples: 1
+  num_inference_steps: 30
+  seed: 42
+  controlnet_conditioning_scale: 0.6
+  read_prompt_from_jsonl: true
+  read_negative_prompt_from_jsonl: false

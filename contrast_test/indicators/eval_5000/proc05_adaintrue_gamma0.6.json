@@ -1,0 +1,11 @@
+{
+    "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adaintrue_gamma0.6_5000",
+    "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+    "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+    "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+    "fid": 78.48186948174924,
+    "art_fid": 90.76308528252991,
+    "lpips": 0.5990731678187847,
+    "lpips_pairs": 5000,
+    "name": "proc05_adaintrue_gamma0.6"
+  }

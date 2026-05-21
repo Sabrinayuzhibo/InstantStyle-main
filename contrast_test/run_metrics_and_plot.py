@@ -60,12 +60,53 @@ def _plot(results: List[Dict], out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(12, 6))
     for idx, key in enumerate(METRIC_KEYS):
         vals = [r[key] for r in results]
-        ax.bar(x + (idx - 1) * width, vals, width=width, label=key)
+        bars = ax.bar(x + (idx - 1) * width, vals, width=width, label=key)
+        for bar, val in zip(bars, vals):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{val:.3f}",
+                ha="center",
+                va="bottom",
+                rotation=0,
+                fontsize=8,
+            )
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=15)
     ax.set_ylabel("Score")
-    ax.set_title("Metric comparison across four runs")
+    ax.set_title("Metric comparison across runs")
+    ax.legend()
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def _plot_single_metric(results: List[Dict], metric_key: str, out_path: Path) -> None:
+    labels = [r["name"] for r in results]
+    vals = [r[metric_key] for r in results]
+    x = np.arange(len(labels))
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(x, vals, width=0.55, color="#2ca02c", label=metric_key)
+    for bar, val in zip(bars, vals):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{val:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    margin = max((max(vals) - min(vals)) * 0.25, 0.01)
+    ax.set_ylim(max(0.0, min(vals) - margin), max(vals) + margin)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=15)
+    ax.set_ylabel(metric_key)
+    ax.set_title(f"{metric_key.upper()} comparison")
     ax.legend()
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
@@ -100,6 +141,7 @@ def main() -> None:
 
     _save_json(output_root / "summary.json", {"results": results})
     _plot(results, output_root / "metrics_comparison.png")
+    _plot_single_metric(results, "lpips", output_root / "lpips_comparison.png")
 
 
 if __name__ == "__main__":
