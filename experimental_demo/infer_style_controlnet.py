@@ -14,7 +14,8 @@ from diffusers.pipelines.controlnet.pipeline_controlnet_sd_xl import (
 )
 
 import cv2
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageFilter
 import yaml
 
 # Make repo-root packages importable when running from experimental_demo.
@@ -40,8 +41,6 @@ class StyleKVInjectionController:
         self.cache: Dict[int, Dict[str, torch.Tensor]] = {}
         self.capture_calls = 0
         self.inject_calls = 0
-        self.total_key_delta = 0.0
-        self.total_value_delta = 0.0
         self.total_key_delta = 0.0
         self.total_value_delta = 0.0
 
@@ -334,6 +333,19 @@ def main() -> None:
     ip_ckpt_path = _require_exists(_resolve_path(str(ip_ckpt), config_base_dir), "IP-Adapter checkpoint")
 
     controlnet_dir = _require_exists(_resolve_path(str(controlnet_path), config_base_dir), "ControlNet directory")
+    standard_bin = controlnet_dir / "diffusion_pytorch_model.bin"
+    fp16_bin = controlnet_dir / "diffusion_pytorch_model.fp16.bin"
+    if not standard_bin.exists() and fp16_bin.exists():
+        try:
+            os.symlink(fp16_bin.name, standard_bin)
+            print(f"[info] created symlink for ControlNet weights: {standard_bin.name} -> {fp16_bin.name}")
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise FileNotFoundError(
+                f"ControlNet weights found as {fp16_bin.name} but diffusers expects {standard_bin.name}; "
+                f"create a symlink or rename the file. Original error: {exc}"
+            ) from exc
     controlnet = ControlNetModel.from_pretrained(
         str(controlnet_dir),
         use_safetensors=controlnet_use_safetensors,
@@ -439,7 +451,7 @@ def main() -> None:
             {
                 "style_image_path": str(style_image_path),
                 "control_image_path": str(control_image_path),
-                "canny_image_path": canny_image_path,
+                "depth_image_path": canny_image_path,
                 "output_image_path": str(output_image_path),
             }
         ]
@@ -457,34 +469,50 @@ def main() -> None:
                 f"Control image [{task_idx}]",
             )
 
-        task_canny_image_path = task.get("canny_image_path")
-        canny_file: Optional[Path] = None
-        if task_canny_image_path:
-            canny_file = _require_exists(
-                _resolve_path(str(task_canny_image_path), config_base_dir),
-                f"Canny image [{task_idx}]",
+        task_depth_image_path = task.get("depth_image_path")
+        if task_depth_image_path is None:
+            task_depth_image_path = task.get("canny_image_path")
+        depth_file: Optional[Path] = None
+        if task_depth_image_path:
+            depth_file = _require_exists(
+                _resolve_path(str(task_depth_image_path), config_base_dir),
+                f"Depth image [{task_idx}]",
             )
 
-        if control_file is None and canny_file is None:
+        if control_file is None and depth_file is None:
             raise ValueError(
-                f"Task [{task_idx}] must provide control_image_path or canny_image_path"
+                f"Task [{task_idx}] must provide control_image_path or depth_image_path"
             )
 
         style_image = Image.open(style_file).convert("RGB").resize((512, 512))
 
-        if canny_file is not None:
-            canny_map = Image.open(canny_file).convert("RGB")
-            control_w, control_h = canny_map.size
-            print(f"[info] task {task_idx}/{len(tasks)} using manual canny={canny_file}")
-        else:
-            assert control_file is not None
+        if control_file is not None:
             input_image = cv2.imread(str(control_file))
             if input_image is None:
                 raise FileNotFoundError(f"Control image not found or unreadable: {control_file}")
-
-            detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
-            canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
             control_h, control_w = input_image.shape[:2]
+            if depth_file is not None:
+                depth_src = Image.open(depth_file).convert("L")
+                depth_src = depth_src.resize((control_w, control_h), Image.BICUBIC)
+                depth_src = depth_src.filter(ImageFilter.GaussianBlur(radius=1.2))
+                depth_arr = cv2.normalize(
+                    cv2.cvtColor(np.array(depth_src), cv2.COLOR_GRAY2BGR),
+                    None,
+                    0,
+                    255,
+                    cv2.NORM_MINMAX,
+                )
+                canny_map = Image.fromarray(cv2.cvtColor(depth_arr.astype("uint8"), cv2.COLOR_BGR2RGB))
+                print(f"[info] task {task_idx}/{len(tasks)} using generated depth from cnt={control_file} with guidance={depth_file}")
+            else:
+                detected_map = cv2.Canny(input_image, canny_low_threshold, canny_high_threshold)
+                canny_map = Image.fromarray(cv2.cvtColor(detected_map, cv2.COLOR_BGR2RGB))
+                print(f"[info] task {task_idx}/{len(tasks)} using auto canny from cnt={control_file}")
+        else:
+            assert depth_file is not None
+            canny_map = Image.open(depth_file).convert("RGB")
+            control_w, control_h = canny_map.size
+            print(f"[info] task {task_idx}/{len(tasks)} using manual depth={depth_file}")
         if use_control_image_size:
             out_width, out_height = control_w, control_h
         else:
@@ -499,12 +527,8 @@ def main() -> None:
             else negative_prompt
         )
 
-        print(
-            f"[info] task {task_idx}/{len(tasks)} prompt={task_prompt}"
-        )
-        print(
-            f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
-        )
+        print(f"[info] task {task_idx}/{len(tasks)} prompt={task_prompt}")
+        print(f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}")
 
         task_adain_ip = bool(task.get("adain_ip", adain_ip))
         task_gamma = float(task.get("style_injection_gamma", style_injection_gamma))
@@ -532,10 +556,7 @@ def main() -> None:
             style_controller.total_key_delta = 0.0
             style_controller.total_value_delta = 0.0
             matched = apply_style_processors(task_processor_names)
-            print(
-                f"[style_injection] task={task_idx} adain={task_adain_ip} gamma={task_gamma:g} "
-                f"components={task_components} match_stats={task_match_stats} processors={len(matched)}"
-            )
+            print(f"[style_injection] task={task_idx} matched_processors={len(matched)}")
 
         if style_controller is not None and per_timestep_style_forward:
             style_tensor = torch.from_numpy(cv2.cvtColor(cv2.imread(str(style_file)), cv2.COLOR_BGR2RGB)).to(device=device, dtype=torch_dtype)
@@ -599,12 +620,9 @@ def main() -> None:
 
         if style_controller is not None and per_timestep_style_forward:
             pipe.unet.forward = original_unet_forward
-            avg_key_delta = style_controller.total_key_delta / max(style_controller.inject_calls, 1)
-            avg_value_delta = style_controller.total_value_delta / max(style_controller.inject_calls, 1)
             print(
                 f"[style_injection] capture_calls={style_controller.capture_calls}, "
-                f"inject_calls={style_controller.inject_calls}, cached_timesteps={len(style_controller.cache)}, "
-                f"gamma={style_controller.gamma}, avg_key_delta={avg_key_delta:.8f}, avg_value_delta={avg_value_delta:.8f}"
+                f"inject_calls={style_controller.inject_calls}, cached_timesteps={len(style_controller.cache)}"
             )
 
         custom_output = task.get("output_image_path")

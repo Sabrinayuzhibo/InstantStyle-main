@@ -61,6 +61,14 @@ def _resolve_path(path_value: str, base_dir: Path) -> Path:
     return base_dir / path
 
 
+def _round_to_multiple_of_8(value: int) -> int:
+    return max(8, int(round(value / 8)) * 8)
+
+
+def _normalize_sdxl_size(width: int, height: int) -> tuple[int, int]:
+    return _round_to_multiple_of_8(width), _round_to_multiple_of_8(height)
+
+
 def _load_pairs_jsonl(jsonl_path: Path) -> List[Dict[str, Any]]:
     _require_exists(jsonl_path, "Pairs jsonl file")
     pairs: List[Dict[str, Any]] = []
@@ -125,6 +133,7 @@ def main() -> None:
 
     device = _get_device(runtime_cfg.get("device") or os.environ.get("INSTANTSTYLE_DEVICE"))
     enable_xformers = bool(runtime_cfg.get("enable_xformers", True))
+    use_controlnet = bool(runtime_cfg.get("use_controlnet", True))
     torch_device = torch.device(device)
     torch_dtype = torch.float16 if device == "cuda" else torch.float32
 
@@ -172,23 +181,34 @@ def main() -> None:
     image_encoder_dir = _require_exists(_resolve_path(str(image_encoder_path), config_base_dir), "Image encoder directory")
     ip_ckpt_path = _require_exists(_resolve_path(str(ip_ckpt), config_base_dir), "IP-Adapter checkpoint")
 
-    controlnet_dir = _require_exists(_resolve_path(str(controlnet_path), config_base_dir), "ControlNet directory")
-    controlnet = ControlNetModel.from_pretrained(
-        str(controlnet_dir),
-        use_safetensors=controlnet_use_safetensors,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-    ).to(torch_device)
+    if use_controlnet:
+        controlnet_dir = _require_exists(_resolve_path(str(controlnet_path), config_base_dir), "ControlNet directory")
+        controlnet = ControlNetModel.from_pretrained(
+            str(controlnet_dir),
+            use_safetensors=controlnet_use_safetensors,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+        ).to(torch_device)
+        pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
+            str(base_model_dir),
+            controlnet=controlnet,
+            torch_dtype=torch_dtype,
+            add_watermarker=False,
+            low_cpu_mem_usage=True,
+            variant=base_model_variant,
+            use_safetensors=base_model_use_safetensors,
+        )
+    else:
+        from diffusers import StableDiffusionXLPipeline
 
-    pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
-        str(base_model_dir),
-        controlnet=controlnet,
-        torch_dtype=torch_dtype,
-        add_watermarker=False,
-        low_cpu_mem_usage=True,
-        variant=base_model_variant,
-        use_safetensors=base_model_use_safetensors,
-    )
+        pipe = StableDiffusionXLPipeline.from_pretrained(
+            str(base_model_dir),
+            torch_dtype=torch_dtype,
+            add_watermarker=False,
+            low_cpu_mem_usage=True,
+            variant=base_model_variant,
+            use_safetensors=base_model_use_safetensors,
+        )
     if enable_xformers:
         if device != "cuda":
             print("[warn] runtime.enable_xformers is true but device is not cuda; skip xformers")
@@ -296,6 +316,11 @@ def main() -> None:
                 raise ValueError("When use_control_image_size is false, width and height must be set in config.")
             out_width, out_height = int(configured_width), int(configured_height)
 
+        norm_width, norm_height = _normalize_sdxl_size(out_width, out_height)
+        if (norm_width, norm_height) != (out_width, out_height):
+            print(f"[info] adjusted output size from {out_width}x{out_height} to {norm_width}x{norm_height} for SDXL")
+        out_width, out_height = norm_width, norm_height
+
         task_prompt = str(task.get("prompt", prompt)) if read_prompt_from_jsonl else prompt
         task_negative_prompt = (
             str(task.get("negative_prompt", negative_prompt))
@@ -310,7 +335,7 @@ def main() -> None:
             f"[info] task {task_idx}/{len(tasks)} negative_prompt={task_negative_prompt}"
         )
 
-        images = ip_model.generate(
+        generate_kwargs = dict(
             pil_image=style_image,
             prompt=task_prompt,
             negative_prompt=task_negative_prompt,
@@ -321,9 +346,12 @@ def main() -> None:
             seed=seed,
             width=out_width,
             height=out_height,
-            image=canny_map,
-            controlnet_conditioning_scale=controlnet_conditioning_scale,
         )
+        if use_controlnet:
+            generate_kwargs["image"] = canny_map
+            generate_kwargs["controlnet_conditioning_scale"] = controlnet_conditioning_scale
+
+        images = ip_model.generate(**generate_kwargs)
 
         custom_output = task.get("output_image_path")
         if custom_output:

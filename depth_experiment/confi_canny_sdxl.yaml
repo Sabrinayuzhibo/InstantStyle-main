@@ -1,0 +1,100 @@
+paths:
+  # Diffusers 格式的 SDXL 基础模型目录（需包含 model_index.json）
+  base_model_path: /root/autodl-tmp/AI_Models/stable-diffusion-xl-base-1.0
+  # Depth 版 SDXL ControlNet 权重目录
+  controlnet_path: /root/autodl-tmp/InstantStyle-main/diffusers_models/controlnet-depth-sdxl-1.0-small
+  # IP-Adapter 的图像编码器目录（SDXL）
+  image_encoder_path: /root/autodl-tmp/InstantStyle-main/sdxl_models/image_encoder
+  # IP-Adapter 权重文件（SDXL）
+  ip_ckpt: /root/autodl-tmp/InstantStyle-main/sdxl_models/ip-adapter_sdxl.bin
+  # 风格参考图（IP-Adapter 输入）
+  style_image_path: /root/autodl-tmp/InstantStyle-main/images_test_ref/blue.jpg
+  # 结构控制图（会先做 Canny，再送入 ControlNet）
+  control_image_path: /root/autodl-tmp/InstantStyle-main/images_content/003.jpg
+  # 可选：直接指定现成 Canny 图；设置后优先使用该图，不再从 control_image_path 现算
+  canny_image_path: /root/autodl-tmp/InstantStyle-main/canny_to_use/003_canny_low.png
+  # 批量任务文件（jsonl），每行一个对象：{"style_image_path": "...", "control_image_path": "..."}
+  pairs_jsonl: /root/autodl-tmp/InstantStyle-main/experimental_demo/style_injection_batch.jsonl
+  # experimental_demo 输出目录；若未设置则回退到 output_image_path 的父目录
+  output_dir: /root/autodl-tmp/InstantStyle-main/experimental_demo/outputs_sdxl
+  output_image_path: /root/autodl-tmp/InstantStyle-main/experimental_demo/tmp/10processor/result_003_adain.png
+
+runtime:
+  # 推理设备：cuda/cpu
+  device: cuda
+  # 启用 xformers memory efficient attention（仅 CUDA）
+  enable_xformers: true
+
+model_loading:
+  # 本地权重是否按 safetensors 加载
+  controlnet_use_safetensors: false
+
+ip_adapter:
+  # 指定哪些 UNet block 启用 IP-Adapter（可多选）
+  target_blocks:
+    - up_blocks.0.attentions.1
+  # 是否启用 AdaIN 风格融合
+  adain_ip: true
+  # AdaIN 中 std 融合权重（0~1）
+  adain_alpha: 1.0
+  # AdaIN 中 mean 融合权重（0~1）
+  adain_beta: 1.0
+
+preprocess:
+  # Canny 低阈值
+  canny_low_threshold: 50
+  # Canny 高阈值
+  canny_high_threshold: 200
+
+output:
+  # true: 输出尺寸跟控制图一致；false: 使用 width/height
+  use_control_image_size: true
+  width: null
+  height: null
+
+debug:
+  # 是否打印 AdaIN 自检统计
+  print_adain_stats: true
+  # 输出命中的 AdaIN processor 样本数量
+  adain_processor_sample_count: 5
+
+style_injection:
+  enabled: true
+  # 精确指定若干个 self-attention processor。
+  processor_names:
+    - up_blocks.0.attentions.1.transformer_blocks.0.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.1.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.2.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.3.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.4.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.5.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.6.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.7.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.8.attn1.processor
+    - up_blocks.0.attentions.1.transformer_blocks.9.attn1.processor
+  attention: self
+  mode: blend
+  components: key_value
+  match_stats: false
+  gamma: 0.5
+  per_timestep_style_forward: true
+  style_forward_noise_strength: 1.0
+
+generate:
+  prompt: "aerial view of a large construction excavation site, heavy excavator digging rocky soil, dump trucks waiting nearby, realistic industrial construction scene, dry quarry terrain, pale sandy ground, massive dust clouds rising from the excavation area, thick airborne dust, swirling beige and gray dust haze, dust spreading across the construction site, particles in the air, smoky dusty atmosphere, dramatic dusty environment, backlit dust, volumetric dust, realistic dust plume, construction machinery partially obscured by dust, harsh daylight, high altitude drone shot, cinematic realism, photorealistic, ultra detailed, natural lighting, realistic shadows, high dynamic range, sharp machinery details, environmental dust, industrial earthmoving operation"
+  # 反向提示词
+  negative_prompt: "cartoon, anime, illustration, painting, low quality, blurry, distorted machinery, deformed excavator, broken truck, duplicated vehicles, extra wheels, unrealistic vehicle scale, bad perspective, wrong aerial angle, people close-up, firefighters, fire hoses, flames, burning hay, straw pile, warehouse fire, urban street, wet ground, rain, snow, fog only, smoke from fire, black smoke, overexposed, underexposed, washed out, oversaturated, excessive contrast, unrealistic dust color, orange smoke, toxic smoke, fantasy scene, sci-fi, text, watermark, logo, frame, border"
+  # IP-Adapter 风格强度
+  scale: 1.0
+  # 文本引导强度
+  guidance_scale: 6
+  # 每次生成张数
+  num_samples: 1
+  # 采样步数
+  num_inference_steps: 30
+  # 随机种子
+  seed: 42
+  # ControlNet 约束强度
+  controlnet_conditioning_scale: 0.6
+  read_prompt_from_jsonl: true
+  read_negative_prompt_from_jsonl: true
