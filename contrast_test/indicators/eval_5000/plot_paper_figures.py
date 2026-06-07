@@ -54,6 +54,12 @@ def load_results() -> List[Dict]:
     return payload["results"]
 
 
+def load_gamma_sweep() -> List[Dict]:
+    sweep_path = ROOT / "outs_proc05_adainfalse__different_gamma.json"
+    with sweep_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def display_name(name: str) -> str:
     return DISPLAY_NAMES.get(name, name.replace("_", "\n"))
 
@@ -78,9 +84,10 @@ def save_fig(fig: plt.Figure, stem: str) -> None:
 
 
 def plot_tradeoff_scatter(results: List[Dict]) -> None:
-    fig, ax = plt.subplots(figsize=(8.6, 6.4))
+    fig, ax = plt.subplots(figsize=(8.8, 6.6))
     lpips_vals = np.array([r["lpips"] for r in results])
     sizes = 160 + (lpips_vals - lpips_vals.min()) / (np.ptp(lpips_vals) + 1e-8) * 520
+    gamma_sweep = sorted(load_gamma_sweep(), key=lambda r: float(r["name"].split("gamma")[-1]))
 
     for r, size in zip(results, sizes):
         is_ours = r["name"] == OURS_NAME
@@ -164,6 +171,34 @@ def plot_tradeoff_scatter(results: List[Dict]) -> None:
                 zorder=6,
                 bbox=dict(boxstyle="round,pad=0.18", fc="white", ec="none", alpha=0.78),
             )
+
+    gamma_x = [float(item["fid"]) for item in gamma_sweep]
+    gamma_y = [float(item["art_fid"]) for item in gamma_sweep]
+    ax.plot(gamma_x, gamma_y, color="#1F77B4", linewidth=1.8, alpha=0.85, zorder=4)
+    ax.scatter(gamma_x, gamma_y, s=55, color="#1F77B4", edgecolors="white", linewidths=0.8, zorder=5, label="γ sweep")
+    gamma_offsets = {
+        0.0: (12, -12),
+        0.2: (10, -2),
+        0.4: (-35, -5),
+        0.8: (-35, -7),
+        1.0: (6, 8),
+    }
+    for item in gamma_sweep:
+        gamma_val = float(item["name"].split("gamma")[-1])
+        gamma_key = round(gamma_val, 1)
+        if gamma_key == 0.6:
+            continue
+        ox, oy = gamma_offsets.get(gamma_key, (10, 8))
+        ax.annotate(
+            f"γ={gamma_val:.1f}",
+            (item["fid"], item["art_fid"]),
+            xytext=(ox, oy),
+            textcoords="offset points",
+            fontsize=8.0,
+            color="#1F77B4",
+            ha="left",
+            va="bottom" if oy >= 0 else "top",
+        )
 
     ax.set_xlabel("Content distribution distance: FID ↓", fontsize=14)
     ax.set_ylabel("Style distribution distance: Art-FID ↓", fontsize=14)
