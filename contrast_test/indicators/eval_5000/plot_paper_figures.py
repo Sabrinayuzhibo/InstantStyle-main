@@ -118,7 +118,7 @@ def plot_tradeoff_scatter(results: List[Dict]) -> None:
         )
         label = display_name(r["name"]).replace("\n", " ")
         if is_new_baseline:
-            label = f"{label}\n(Our New baseline)"
+            label = f"{label}\n"
         if is_new_baseline:
             label_offsets = {
                 "adain_1blk": (14, -18, "left", "top"),
@@ -221,7 +221,7 @@ def plot_tradeoff_scatter(results: List[Dict]) -> None:
     handles = [
         plt.Line2D([0], [0], marker="*", color="w", markerfacecolor="#C81D25", markeredgecolor="black", markersize=14, label="Ours w/o AdaIN"),
         plt.Line2D([0], [0], marker="D", color="w", markerfacecolor="#F26B38", markeredgecolor="black", markersize=8, label="Ours AdaIN"),
-        plt.Line2D([0], [0], marker="P", color="w", markerfacecolor="#7B2CBF", markeredgecolor="black", markersize=9, label="Our New baseline"),
+        plt.Line2D([0], [0], marker="P", color="w", markerfacecolor="#7B2CBF", markeredgecolor="black", markersize=9, label="Ours (Naive AdaIN)"),
         plt.Line2D([0], [0], marker="s", color="w", markerfacecolor="#2D5F8B", markeredgecolor="black", markersize=8, label="InstantStyle baselines"),
         plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="#7A869A", markeredgecolor="white", markersize=9, label="Other methods"),
     ]
@@ -249,7 +249,7 @@ def plot_metric_small_multiples(results: List[Dict]) -> None:
         if metric == "art_fid":
             for tick_label, name in zip(ax.get_xticklabels(), [r["name"] for r in results]):
                 if name in NEW_BASELINE_NAMES:
-                    tick_label.set_text(f"{tick_label.get_text()}\n(Our New baseline)")
+                    tick_label.set_text(f"{tick_label.get_text()}\n")
             ax.figure.canvas.draw_idle()
         ax.tick_params(axis="x", pad=2)
         ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.25)

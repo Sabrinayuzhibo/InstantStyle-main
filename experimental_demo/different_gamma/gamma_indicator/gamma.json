@@ -1,0 +1,68 @@
+[
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.0_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 76.57,
+      "art_fid": 98.63,
+      "lpips": 0.5965,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.0"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.2_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 76.91,
+      "art_fid": 94.26,
+      "lpips": 0.6058,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.2"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.4_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 77.46,
+      "art_fid": 89.72,
+      "lpips": 0.6167,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.4"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.6_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 78.14455511564324,
+      "art_fid": 85.43033501871918,
+      "lpips": 0.6284685461640358,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.6"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma0.8_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 79.67,
+      "art_fid": 83.58,
+      "lpips": 0.6552,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma0.8"
+    },
+    {
+      "gen_dir": "/root/autodl-tmp/InstantStyle-main/experimental_demo/outputs/proc05_adainfalse_gamma1.0_5000",
+      "content_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "style_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/wikiart_5000",
+      "lpips_ref_dir": "/root/autodl-tmp/InstantStyle-main/contrast_test/dataset/ms_coco_5000",
+      "fid": 82.36,
+      "art_fid": 82.91,
+      "lpips": 0.6974,
+      "lpips_pairs": 5000,
+      "name": "proc05_adainfalse_gamma1.0"
+    }
+  ]
